@@ -91,10 +91,11 @@ async def run_scraper(domains: List[str], output_file: str):
         await client.close()
 
 
-async def run_harvest(domains: List[str], output_file: str):
-    client = AsyncClient(max_connections=50)
+async def run_harvest(domains: List[str], output_file: str, concurrency: int = 20):
+    client = AsyncClient(max_connections=concurrency + 10)
     discovery = DiscoveryEngine(client)
     all_job_urls = set()
+    semaphore = asyncio.Semaphore(concurrency)
 
     try:
         with Progress(
@@ -107,15 +108,22 @@ async def run_harvest(domains: List[str], output_file: str):
         ) as progress:
             task = progress.add_task("[cyan]Harvesting Job URLs...", total=len(domains))
 
-            for domain in domains:
-                progress.update(
-                    task,
-                    description=f"[cyan]Harvesting:[/cyan] [bold]{urlparse(domain).netloc}[/bold]",
-                )
-                job_urls = await discovery.find_job_urls_from_sitemap(domain)
-                if job_urls:
-                    all_job_urls.update(job_urls)
-                progress.advance(task)
+            async def harvest_one(domain):
+                async with semaphore:
+                    progress.update(
+                        task,
+                        description=f"[cyan]Harvesting:[/cyan] [bold]{urlparse(domain).netloc}[/bold]",
+                    )
+                    try:
+                        job_urls = await discovery.find_job_urls_from_sitemap(domain)
+                        if job_urls:
+                            all_job_urls.update(job_urls)
+                    except Exception as e:
+                        logger.error(f"Error harvesting {domain}: {e}")
+                    finally:
+                        progress.advance(task)
+
+            await asyncio.gather(*(harvest_one(domain) for domain in domains))
 
         # Save results
         output_path = Path(output_file)
@@ -224,7 +232,8 @@ def discover(input_file, output_file, use_ct, validate, concurrency):
     "--output", default="input/job_urls.txt", help="Output file for job URLs."
 )
 @click.option("--limit", type=int, help="Restrict to N random companies for testing.")
-def harvest(input, output, limit):
+@click.option("--concurrency", default=20, help="Number of concurrent discovery tasks.")
+def harvest(input, output, limit, concurrency):
     """Harvest all job URLs from discovered portals."""
     if not Path(input).exists():
         console.print(
@@ -244,14 +253,15 @@ def harvest(input, output, limit):
         )
         domains = selected_domains
 
-    asyncio.run(run_harvest(domains, output))
+    asyncio.run(run_harvest(domains, output, concurrency=concurrency))
 
 
 @cli.command()
 @click.option("--input", default="input/job_urls.txt", help="File with Job URLs.")
 @click.option("--output", default="output/v2_jobs.jsonl", help="Output JSONL file.")
 @click.option("--limit", type=int, help="Limit number of jobs to scrape.")
-def scrape(input, output, limit):
+@click.option("--concurrency", default=10, help="Number of concurrent scraper tasks.")
+def scrape(input, output, limit, concurrency):
     """Scrape details from harvested job URLs."""
     if not Path(input).exists():
         console.print(
@@ -274,8 +284,10 @@ def scrape(input, output, limit):
         )
 
     async def scrape_jobs():
-        client = AsyncClient(max_connections=50)
+        client = AsyncClient(max_connections=concurrency + 10)
         all_jobs = []
+        semaphore = asyncio.Semaphore(concurrency)
+
         try:
             with Progress(
                 SpinnerColumn(),
@@ -286,19 +298,28 @@ def scrape(input, output, limit):
                 transient=True,
             ) as progress:
                 task = progress.add_task("[cyan]Scraping Jobs...", total=len(urls))
-                for url in urls:
-                    progress.update(
-                        task, description=f"[cyan]Scraping:[/cyan] {url[:50]}..."
-                    )
-                    resp = await client.get(url)
-                    if resp:
-                        domain = urlparse(url).netloc
-                        job = JobParser.extract_from_html(
-                            resp.text, url, domain.split(".")[0].title()
+
+                async def scrape_one(url):
+                    async with semaphore:
+                        progress.update(
+                            task,
+                            description=f"[cyan]Scraping:[/cyan] {urlparse(url).netloc}...",
                         )
-                        if job:
-                            all_jobs.append(job)
-                    progress.advance(task)
+                        try:
+                            resp = await client.get(url)
+                            if resp:
+                                domain = urlparse(url).netloc
+                                job = JobParser.extract_from_html(
+                                    resp.text, url, domain.split(".")[0].title()
+                                )
+                                if job:
+                                    all_jobs.append(job)
+                        except Exception as e:
+                            logger.error(f"Error scraping {url}: {e}")
+                        finally:
+                            progress.advance(task)
+
+                await asyncio.gather(*(scrape_one(url) for url in urls))
 
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)
