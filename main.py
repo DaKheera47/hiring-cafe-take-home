@@ -209,7 +209,7 @@ def discover(input_file, output_file, deep_recon, validate, concurrency):
     if deep_recon:
         initial_count = len(all_potential_domains)
         console.print(
-            "[bold yellow]Running Deep Recon (CT logs, HackerTarget, AlienVault, Urlscan)...[/bold yellow]"
+            "[bold yellow]Running Deep Recon (CT logs, HackerTarget, AlienVault, Urlscan, Wayback)...[/bold yellow]"
         )
         recon_domains = asyncio.run(discovery.run_all_discovery())
         all_potential_domains.update(recon_domains)

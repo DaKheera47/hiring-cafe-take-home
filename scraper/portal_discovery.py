@@ -32,6 +32,12 @@ class PortalDiscovery:
         "portal-stage",
     )
 
+    # Domains to exclude - these are not actual job portals
+    EXCLUDED_DOMAINS = (
+        "www.avature.net",
+        "avature.net",
+    )
+
     @staticmethod
     def normalize_to_base(url: str) -> Optional[str]:
         """Extracts clean base URL (e.g., https://company.avature.net)."""
@@ -45,7 +51,11 @@ class PortalDiscovery:
             parsed = urlparse(url)
             netloc = parsed.netloc.lower()
             if "avature.net" in netloc:
+                # Check blacklist keywords
                 if any(k in netloc for k in PortalDiscovery.BLACKLIST_KEYWORDS):
+                    return None
+                # Check excluded domains (bare avature.net URLs)
+                if netloc in PortalDiscovery.EXCLUDED_DOMAINS:
                     return None
                 return f"{parsed.scheme}://{parsed.netloc}"
         except Exception:
@@ -95,6 +105,70 @@ class PortalDiscovery:
             except Exception as e:
                 logger.error(f"CT log discovery attempt {attempt} failed: {e}")
                 await asyncio.sleep(attempt * 2)
+
+        return domains
+
+    async def discover_from_wayback(self) -> Set[str]:
+        """Query Wayback Machine CDX API for historical avature.net URLs."""
+        from curl_cffi.requests import AsyncSession
+
+        logger.info("Querying Wayback Machine CDX API for historical URLs...")
+        domains = set()
+        unique_seen = set()
+
+        wayback_url = (
+            "http://web.archive.org/cdx/search/cdx"
+            "?url=avature.net&matchType=domain&fl=original&collapse=urlkey"
+            "&output=txt&filter=mimetype:text/html"
+        )
+
+        try:
+            async with AsyncSession(impersonate="chrome") as session:
+                resp = await session.get(wayback_url, timeout=120)
+
+                if resp.status_code == 200:
+                    lines = resp.text.split("\n")
+                    logger.info(
+                        f"Wayback returned {len(lines)} historical URLs to process"
+                    )
+
+                    for line in lines:
+                        raw_url = line.strip()
+                        if not raw_url:
+                            continue
+
+                        if not raw_url.startswith("http"):
+                            raw_url = "http://" + raw_url
+
+                        try:
+                            parsed = urlparse(raw_url)
+                            domain = parsed.netloc.lower()
+
+                            # Remove port if present
+                            if ":" in domain:
+                                domain = domain.split(":")[0]
+
+                            # Check if it's a valid avature domain
+                            if "avature.net" in domain and domain not in unique_seen:
+                                unique_seen.add(domain)
+
+                                # Apply blacklist and exclusion filters
+                                if any(k in domain for k in self.BLACKLIST_KEYWORDS):
+                                    continue
+                                if domain in self.EXCLUDED_DOMAINS:
+                                    continue
+
+                                domains.add(f"https://{domain}")
+
+                        except Exception:
+                            pass
+
+                    logger.info(f"Wayback found: {len(domains)} unique candidates.")
+                else:
+                    logger.warning(f"Wayback returned status {resp.status_code}")
+
+        except Exception as e:
+            logger.error(f"Wayback discovery failed: {e}")
 
         return domains
 
@@ -204,17 +278,28 @@ class PortalDiscovery:
         ht_task = asyncio.create_task(self.discover_from_hackertarget())
         av_task = asyncio.create_task(self.discover_from_alienvault())
         us_task = asyncio.create_task(self.discover_from_urlscan())
+        wb_task = asyncio.create_task(self.discover_from_wayback())
 
-        ct_domains, ht_domains, av_domains, us_domains = await asyncio.gather(
-            ct_task, ht_task, av_task, us_task
-        )
+        (
+            ct_domains,
+            ht_domains,
+            av_domains,
+            us_domains,
+            wb_domains,
+        ) = await asyncio.gather(ct_task, ht_task, av_task, us_task, wb_task)
 
         # Merge all domains
-        all_domains = ct_domains.union(ht_domains).union(av_domains).union(us_domains)
+        all_domains = (
+            ct_domains.union(ht_domains)
+            .union(av_domains)
+            .union(us_domains)
+            .union(wb_domains)
+        )
 
         logger.info(
             f"Discovery complete: CT={len(ct_domains)}, HackerTarget={len(ht_domains)}, "
-            f"AlienVault={len(av_domains)}, Urlscan={len(us_domains)} -> Total unique: {len(all_domains)}"
+            f"AlienVault={len(av_domains)}, Urlscan={len(us_domains)}, Wayback={len(wb_domains)} "
+            f"-> Total unique: {len(all_domains)}"
         )
 
         return all_domains
@@ -305,5 +390,4 @@ class PortalDiscovery:
                 except Exception as e:
                     logger.debug(f"Error checking {url}{path}: {e}")
 
-        return None
         return None
