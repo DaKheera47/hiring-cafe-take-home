@@ -38,27 +38,52 @@ class DiscoveryEngine:
             # 3. Process each potential URL line
             lines = processed_content.splitlines()
             for line in lines:
-                parts = (
-                    line.strip().split()
-                )  # Split by whitespace in case multiple tags were stripped
+                parts = line.strip().split()
                 for part in parts:
+                    # Clean trailing slashes or junk
+                    part = part.strip().rstrip(" /")
+
                     if "JobDetail" in part and part.startswith("http"):
-                        # Extract the URL. If it has a date at the end (User logic), strip it.
-                        # Avature sitemaps often have the date immediately following the URL in stripped text.
-                        # URL looks like: https.../JobDetail/123452026-01-13
-                        match = re.search(r"(https?://.*?/JobDetail/\d+)", part)
+                        # 1. Skip obvious generic landing pages (uop.avature.net/careers/JobDetail)
+                        # or internal job landing templates (../InJobDetail)
+                        if part.lower().endswith("/jobdetail") or part.lower().endswith(
+                            "/injobdetail"
+                        ):
+                            continue
+
+                        # 2. Extract specific job URL (stripping trailing concatenated text/dates)
+                        # We look for a pattern that has something AFTER the JobDetail part
+                        # Standard ID-only: .../JobDetail/12345
+                        # Slug+ID: .../JobDetail/Title-Slug/12345
+                        match = re.search(
+                            r"(https?://.*?/JobDetail/.*?/\d+)", part, re.IGNORECASE
+                        )
                         if match:
                             job_urls.add(match.group(1))
-                        else:
-                            # Fallback to simple strip if the numeric ID + Date is messy
-                            # Just take the part that contains JobDetail
+                        elif re.search(
+                            r"(https?://.*?/JobDetail/\d+)", part, re.IGNORECASE
+                        ):
+                            job_urls.add(
+                                re.search(
+                                    r"(https?://.*?/JobDetail/\d+)", part, re.IGNORECASE
+                                ).group(1)
+                            )
+                        elif "/JobDetail/" in part and not part.endswith("/JobDetail"):
+                            # Last safeguard: if it looks like a job URL but doesn't fit the ID-at-end pattern
                             job_urls.add(part)
 
             # If we didn't find anything with the strip method, try one more regex fallback
             if not job_urls:
-                job_urls.update(
-                    re.findall(r"https?://[^<\s]+JobDetail/[^<\s]+", content)
+                raw_found = re.findall(
+                    r"https?://[^<\s]+JobDetail/[^<\s]+", content, re.IGNORECASE
                 )
+                for r in raw_found:
+                    r = r.rstrip(" /")
+                    if not (
+                        r.lower().endswith("/jobdetail")
+                        or r.lower().endswith("/injobdetail")
+                    ):
+                        job_urls.add(r)
 
         if job_urls:
             logger.info(
