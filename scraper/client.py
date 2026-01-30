@@ -31,12 +31,32 @@ class AsyncClient:
 
     async def get(self, url: str, **kwargs) -> Optional[httpx.Response]:
         try:
-            response = await self.client.get(url, **kwargs)
-            if response.status_code == 200:
-                return response
-            logger.warning(f"Failed to fetch {url}: Status {response.status_code}")
+            # We use a secondary attempt with verify=False if the first fails due to SSL
+            try:
+                response = await self.client.get(url, **kwargs)
+                if response.status_code == 200:
+                    return response
+                if response.status_code == 404:
+                    return None
+            except (
+                httpx.ConnectError,
+                httpx.RemoteProtocolError,
+                httpx.ConnectTimeout,
+            ) as e:
+                logger.debug(f"Retrying {url} with relaxed SSL/timeout due to: {e}")
+                # Try one more time with SSL verification disabled for enterprise portals with custom certs
+                async with httpx.AsyncClient(
+                    verify=False, headers=self.headers, timeout=20
+                ) as backup_client:
+                    response = await backup_client.get(url, **kwargs)
+                    if response.status_code == 200:
+                        return response
+
+            if response.status_code != 200:
+                logger.debug(f"Failed to fetch {url}: Status {response.status_code}")
+
         except Exception as e:
-            logger.error(f"Error fetching {url}: {str(e)}")
+            logger.error(f"Critical error fetching {url}: {str(e)}")
         return None
 
     async def close(self):
