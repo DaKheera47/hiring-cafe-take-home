@@ -66,7 +66,7 @@ class AsyncClient:
 
     async def get(self, url: str, max_retries: int = 4, **kwargs) -> Optional[any]:
         """Fetches a URL with automatic retries for rate-limiting (406, 429)."""
-        retry_delay = 5.0
+        retry_delay = 30.0  # Increased to 30s as per user request
 
         for attempt in range(max_retries + 1):
             await asyncio.sleep(random.uniform(1.0, 3.0))
