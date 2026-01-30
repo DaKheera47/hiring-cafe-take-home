@@ -3,17 +3,9 @@ import asyncio
 import random
 from typing import Optional
 import logging
+from user_agent import generate_user_agent
 
 logger = logging.getLogger(__name__)
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:122.0) Gecko/20100101 Firefox/122.0",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
-]
 
 
 class AsyncClient:
@@ -33,21 +25,39 @@ class AsyncClient:
 
     def _get_headers(self) -> dict:
         """Returns randomized headers to avoid fingerprinting."""
-        ua = random.choice(USER_AGENTS)
-        return {
+        # Use user-agent library for realistic desktop UAs
+        ua = generate_user_agent(os=("win", "mac", "linux"), device_type="desktop")
+
+        # Randomly choose some common browser behaviors
+        headers = {
             "User-Agent": ua,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Language": "en-US,en;q=0.9",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": random.choice(
+                ["en-US,en;q=0.9", "en-GB,en;q=0.8,en;q=0.7", "en-US,en;q=0.5"]
+            ),
             "Accept-Encoding": "gzip, deflate, br",
+            "Referer": "https://www.google.com/",
             "DNT": "1",
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-Site": "cross-site",
             "Sec-Fetch-User": "?1",
             "Cache-Control": "max-age=0",
         }
+
+        # Add Sec-Ch-Ua headers if it's a Chrome-like UA (to be more realistic)
+        if "Chrome" in ua:
+            headers["Sec-Ch-Ua"] = (
+                '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"'
+            )
+            headers["Sec-Ch-Ua-Mobile"] = "?0"
+            headers["Sec-Ch-Ua-Platform"] = (
+                '"Windows"' if "Windows" in ua else '"macOS"'
+            )
+
+        return headers
 
     async def get(
         self, url: str, max_retries: int = 4, **kwargs

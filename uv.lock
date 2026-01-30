@@ -39,6 +39,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "rich" },
     { name = "tqdm" },
+    { name = "user-agent" },
 ]
 
 [package.metadata]
@@ -53,6 +54,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "rich", specifier = ">=14.3.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "user-agent", specifier = ">=0.1.14" },
 ]
 
 [[package]]
@@ -596,6 +598,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pytz"
+version = "2025.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f8/bf/abbd3cdfb8fbc7fb3d4d38d320f2441b1e7cbe29be4f23797b4a2b5d8aac/pytz-2025.2.tar.gz", hash = "sha256:360b9e3dbb49a209c21ad61809c7fb453643e048b38924c765813546746e81c3", size = 320884, upload-time = "2025-03-25T02:25:00.538Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/c4/34e93fe5f5429d7570ec1fa436f1986fb1f00c3e0f43a589fe2bbcd22c3f/pytz-2025.2-py2.py3-none-any.whl", hash = "sha256:5ddf76296dd8c44c26eb8f4b6f35488f3ccbf6fbbd7adee0b7262d43f0ec2f00", size = 509225, upload-time = "2025-03-25T02:24:58.468Z" },
+]
+
+[[package]]
 name = "rdflib"
 version = "7.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -693,6 +704,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6661c76461e25f024d5a38a46f04aaca912426a2b1d3/urllib3-2.6.3.tar.gz", hash = "sha256:1b62b6884944a57dbe321509ab94fd4d3b307075e0c2eae991ac71ee15ad38ed", size = 435556, upload-time = "2026-01-07T16:24:43.925Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl", hash = "sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4", size = 131584, upload-time = "2026-01-07T16:24:42.685Z" },
+]
+
+[[package]]
+name = "user-agent"
+version = "0.1.14"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pytz" },
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ce/bc/8b2188a9c54d126b236c8a417e9e1aa05f0a6c74aa62ee5d1d14db57096c/user_agent-0.1.14.tar.gz", hash = "sha256:5b25bedb43f89dff7d1ab569a96c16bea6f151a2f07b6323d4356ead5a96e4d2", size = 23404, upload-time = "2025-09-10T12:27:31.252Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4c/fd/69b48dad7f7aea651d15e248d50d24f186dc13855834a6aafaafe8846a1f/user_agent-0.1.14-py2.py3-none-any.whl", hash = "sha256:8eebb14e176e98e674b4ee4403ff880ad78a3fb3a5a9c79a26a21d5af08d56ee", size = 20057, upload-time = "2025-09-10T12:27:29.886Z" },
 ]
 
 [[package]]
