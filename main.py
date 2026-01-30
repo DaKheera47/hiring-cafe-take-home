@@ -171,10 +171,10 @@ def cli():
     "--output-file", default="input/domains.txt", help="File to save cleaned domains."
 )
 @click.option(
-    "--use-ct",
+    "--deep-recon",
     is_flag=True,
     default=True,
-    help="Use Certificate Transparency logs for discovery.",
+    help="Use all recon sources (CT logs, HackerTarget, AlienVault, Urlscan) for discovery.",
 )
 @click.option(
     "--validate",
@@ -183,11 +183,11 @@ def cli():
     help="Validate discovered portals before saving.",
 )
 @click.option("--concurrency", default=10, help="Parallel validation concurrency.")
-def discover(input_file, output_file, use_ct, validate, concurrency):
+def discover(input_file, output_file, deep_recon, validate, concurrency):
     """Discover and normalize Avature portals."""
     from scraper.portal_discovery import PortalDiscovery
 
-    console.print("[bold cyan]Starting Portal Discovery...[/bold cyan]")
+    console.print("[bold cyan]🚀 Starting Portal Discovery...[/bold cyan]")
     discovery = PortalDiscovery()
     all_potential_domains = set()
 
@@ -205,16 +205,17 @@ def discover(input_file, output_file, use_ct, validate, concurrency):
     else:
         logger.warning(f"Seed file {input_file} not found. Starting with empty list.")
 
-    # 2. Advanced discovery via CT Logs
-    if use_ct:
+    # 2. Deep Recon: Run all discovery sources in parallel
+    if deep_recon:
         initial_count = len(all_potential_domains)
-        ct_domains = asyncio.run(discovery.discover_from_ct_logs())
-        all_potential_domains.update(ct_domains)
+        console.print(
+            "[bold yellow]Running Deep Recon (CT logs, HackerTarget, AlienVault, Urlscan)...[/bold yellow]"
+        )
+        recon_domains = asyncio.run(discovery.run_all_discovery())
+        all_potential_domains.update(recon_domains)
         added_count = len(all_potential_domains) - initial_count
 
-        logger.info(
-            f"CT Discovery complete: added {added_count} new potential domains."
-        )
+        logger.info(f"Deep Recon complete: added {added_count} new potential domains.")
         logger.info(
             f"Total potential domains to validate: {len(all_potential_domains)}"
         )

@@ -98,6 +98,127 @@ class PortalDiscovery:
 
         return domains
 
+    async def discover_from_hackertarget(self) -> Set[str]:
+        """Query HackerTarget API for DNS host records of avature.net subdomains."""
+        from curl_cffi.requests import AsyncSession
+
+        logger.info("Querying HackerTarget API for DNS records...")
+        domains = set()
+
+        try:
+            async with AsyncSession(impersonate="chrome") as session:
+                url = "https://api.hackertarget.com/hostsearch/?q=avature.net"
+                resp = await session.get(url, timeout=20)
+
+                if resp.status_code == 200:
+                    lines = resp.text.split("\n")
+                    for line in lines:
+                        parts = line.split(",")
+                        if len(parts) > 0:
+                            domain = parts[0].strip().lower()
+                            if "avature.net" in domain:
+                                if not any(
+                                    k in domain for k in self.BLACKLIST_KEYWORDS
+                                ):
+                                    domains.add(f"https://{domain}")
+
+                    logger.info(f"HackerTarget found: {len(domains)} candidates.")
+                else:
+                    logger.warning(f"HackerTarget returned status {resp.status_code}")
+
+        except Exception as e:
+            logger.error(f"HackerTarget discovery failed: {e}")
+
+        return domains
+
+    async def discover_from_alienvault(self) -> Set[str]:
+        """Query AlienVault OTX passive DNS for avature.net subdomains."""
+        from curl_cffi.requests import AsyncSession
+
+        logger.info("Querying AlienVault OTX for passive DNS records...")
+        domains = set()
+
+        try:
+            async with AsyncSession(impersonate="chrome") as session:
+                url = "https://otx.alienvault.com/otxapi/indicators/domain/passive_dns/avature.net"
+                resp = await session.get(url, timeout=20)
+
+                if resp.status_code == 200:
+                    data = resp.json()
+                    passive_dns = data.get("passive_dns", [])
+
+                    for entry in passive_dns:
+                        hostname = entry.get("hostname", "").lower()
+                        if "avature.net" in hostname and "*" not in hostname:
+                            if not any(k in hostname for k in self.BLACKLIST_KEYWORDS):
+                                domains.add(f"https://{hostname}")
+
+                    logger.info(f"AlienVault found: {len(domains)} candidates.")
+                else:
+                    logger.warning(f"AlienVault returned status {resp.status_code}")
+
+        except Exception as e:
+            logger.error(f"AlienVault discovery failed: {e}")
+
+        return domains
+
+    async def discover_from_urlscan(self) -> Set[str]:
+        """Query Urlscan.io for vanity domains that redirect to or use Avature."""
+        from curl_cffi.requests import AsyncSession
+        from urllib.parse import urlparse as parse_url
+
+        logger.info("Querying Urlscan.io for vanity domains...")
+        domains = set()
+
+        try:
+            async with AsyncSession(impersonate="chrome") as session:
+                url = "https://urlscan.io/api/v1/search/?q=domain:avature.net&size=1000"
+                resp = await session.get(url, timeout=20)
+
+                if resp.status_code == 200:
+                    data = resp.json()
+                    results = data.get("results", [])
+
+                    for r in results:
+                        task_url = r.get("task", {}).get("url", "")
+                        if "avature.net" in task_url:
+                            d = parse_url(task_url).netloc.lower()
+                            if d and not any(k in d for k in self.BLACKLIST_KEYWORDS):
+                                domains.add(f"https://{d}")
+
+                    logger.info(f"Urlscan found: {len(domains)} candidates.")
+                else:
+                    logger.warning(f"Urlscan returned status {resp.status_code}")
+
+        except Exception as e:
+            logger.error(f"Urlscan discovery failed: {e}")
+
+        return domains
+
+    async def run_all_discovery(self) -> Set[str]:
+        """Run all discovery methods in parallel and merge results."""
+        logger.info("🚀 Starting Deep Recon for Avature Portals...")
+
+        # Run all discovery methods concurrently
+        ct_task = asyncio.create_task(self.discover_from_ct_logs())
+        ht_task = asyncio.create_task(self.discover_from_hackertarget())
+        av_task = asyncio.create_task(self.discover_from_alienvault())
+        us_task = asyncio.create_task(self.discover_from_urlscan())
+
+        ct_domains, ht_domains, av_domains, us_domains = await asyncio.gather(
+            ct_task, ht_task, av_task, us_task
+        )
+
+        # Merge all domains
+        all_domains = ct_domains.union(ht_domains).union(av_domains).union(us_domains)
+
+        logger.info(
+            f"Discovery complete: CT={len(ct_domains)}, HackerTarget={len(ht_domains)}, "
+            f"AlienVault={len(av_domains)}, Urlscan={len(us_domains)} -> Total unique: {len(all_domains)}"
+        )
+
+        return all_domains
+
     async def validate_portals(
         self, urls: List[str], concurrency: int = 10
     ) -> List[str]:
