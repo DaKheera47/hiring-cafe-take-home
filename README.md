@@ -8,7 +8,7 @@
 
 This project aims to scrape job inventory from Avature portals using a combination of techniques to bypass WAFs and extract job data. I found several hurdles along the way, which i've documented below. I won't bother mentioning simple things like preferring web requests vs spinning up a full-blown web browser, etc. I'll instead mention the more complex hurdles that I overcame for Avature specifically.
 
-I focused on ensuring I got around the WAFs in place, more than the data extraction process, as that can be improved more easily, once we have the HTML available to us. Thus, please ignore any incorrect job titles or things that may have ended up in the final data.
+I focused on ensuring I got around the WAFs in place, more than the data extraction process, as that can be improved more easily, once we have the HTML available to us. Given the 6-hour constraint, I prioritised Access & Coverage (solving the WAF) over granular parsing quality. The extraction logic is modular and ready for site-specific tuning
 
 ---
 
