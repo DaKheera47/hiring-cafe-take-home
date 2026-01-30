@@ -143,10 +143,16 @@ def discover(input_file, output_file, use_ct, validate, concurrency):
 
     # 2. Advanced discovery via CT Logs
     if use_ct:
+        initial_count = len(all_potential_domains)
         ct_domains = asyncio.run(discovery.discover_from_ct_logs())
         all_potential_domains.update(ct_domains)
+        added_count = len(all_potential_domains) - initial_count
+
         logger.info(
-            f"Total potential domains after CT discovery: {len(all_potential_domains)}"
+            f"CT Discovery complete: added {added_count} new potential domains."
+        )
+        logger.info(
+            f"Total potential domains to validate: {len(all_potential_domains)}"
         )
 
     # 3. Validation phase
