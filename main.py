@@ -324,8 +324,12 @@ def scrape(input, output, limit, concurrency):
 
     async def scrape_jobs():
         client = AsyncClient(max_connections=concurrency + 10)
-        all_jobs = []
         semaphore = asyncio.Semaphore(concurrency)
+        write_lock = asyncio.Lock()
+        scraped_count = 0
+
+        output_path = Path(output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
             with Progress(
@@ -340,72 +344,80 @@ def scrape(input, output, limit, concurrency):
             ) as progress:
                 task = progress.add_task("[cyan]Scraping Jobs...", total=len(urls))
 
-                async def scrape_one(url, index):
-                    async with semaphore:
-                        # Staggered start to avoid concurrent bursts
-                        await asyncio.sleep(index * 0.1 % 2)
+                # Open file once in append mode
+                with open(output_path, "a") as f:
 
-                        try:
-                            resp = await client.get(url)
-                            if resp:
-                                netloc = urlparse(url).netloc
-                                if "avature.net" in netloc:
-                                    company_guess = netloc.replace(
-                                        ".avature.net", ""
-                                    ).title()
-                                else:
-                                    # Fallback for vanity domains (talent.company.com)
-                                    parts = netloc.split(".")
-                                    company_guess = (
-                                        parts[-2].title()
-                                        if len(parts) > 1
-                                        else netloc.title()
-                                    )
+                    async def scrape_one(url, index):
+                        nonlocal scraped_count
+                        async with semaphore:
+                            # Staggered start to avoid concurrent bursts
+                            await asyncio.sleep(index * 0.1 % 2)
 
-                                job = JobParser.extract_from_html(
-                                    resp.text, url, company_guess
-                                )
-                                if job:
-                                    all_jobs.append(job)
-                                    # Update count
-                                    p_task = progress.tasks[task]
-                                    completed = int(p_task.completed) + 1
-                                    total = int(p_task.total)
-
-                                    # Calculate ETA
-                                    elapsed = p_task.elapsed or 0.1
-                                    rate = (
-                                        p_task.completed / elapsed if elapsed > 0 else 0
-                                    )
-                                    remaining = total - completed
-                                    eta_secs = remaining / rate if rate > 0 else 0
-
-                                    if eta_secs > 3600:
-                                        eta_str = f"{int(eta_secs // 3600)}h {int((eta_secs % 3600) // 60)}m"
-                                    elif eta_secs > 60:
-                                        eta_str = f"{int(eta_secs // 60)}m {int(eta_secs % 60)}s"
+                            try:
+                                resp = await client.get(url)
+                                if resp:
+                                    netloc = urlparse(url).netloc
+                                    if "avature.net" in netloc:
+                                        company_guess = netloc.replace(
+                                            ".avature.net", ""
+                                        ).title()
                                     else:
-                                        eta_str = f"{int(eta_secs)}s"
+                                        # Fallback for vanity domains (talent.company.com)
+                                        parts = netloc.split(".")
+                                        company_guess = (
+                                            parts[-2].title()
+                                            if len(parts) > 1
+                                            else netloc.title()
+                                        )
 
-                                    logger.info(
-                                        f"[[bold blue]{completed}/{total}[/bold blue]] [bold yellow]ETA: {eta_str}[/bold yellow] [bold green]✓[/bold green] Scraped: [cyan]{job.title}[/cyan] ([bold]{job.company}[/bold])"
+                                    job = JobParser.extract_from_html(
+                                        resp.text, url, company_guess
                                     )
-                        except Exception as e:
-                            logger.error(f"Error scraping {urlparse(url).netloc}: {e}")
-                        finally:
-                            progress.advance(task)
+                                    if job:
+                                        # Write immediately with lock
+                                        async with write_lock:
+                                            f.write(job.model_dump_json() + "\n")
+                                            f.flush()
+                                            scraped_count += 1
 
-                await asyncio.gather(
-                    *(scrape_one(url, i) for i, url in enumerate(urls))
-                )
+                                        # Update count
+                                        p_task = progress.tasks[task]
+                                        completed = int(p_task.completed) + 1
+                                        total = int(p_task.total)
 
-            output_path = Path(output)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "w") as f:
-                for job in all_jobs:
-                    f.write(job.model_dump_json() + "\n")
+                                        # Calculate ETA
+                                        elapsed = p_task.elapsed or 0.1
+                                        rate = (
+                                            p_task.completed / elapsed
+                                            if elapsed > 0
+                                            else 0
+                                        )
+                                        remaining = total - completed
+                                        eta_secs = remaining / rate if rate > 0 else 0
+
+                                        if eta_secs > 3600:
+                                            eta_str = f"{int(eta_secs // 3600)}h {int((eta_secs % 3600) // 60)}m"
+                                        elif eta_secs > 60:
+                                            eta_str = f"{int(eta_secs // 60)}m {int(eta_secs % 60)}s"
+                                        else:
+                                            eta_str = f"{int(eta_secs)}s"
+
+                                        logger.info(
+                                            f"[[bold blue]{completed}/{total}[/bold blue]] [bold yellow]ETA: {eta_str}[/bold yellow] [bold green]✓[/bold green] Scraped: [cyan]{job.title}[/cyan] ([bold]{job.company}[/bold])"
+                                        )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error scraping {urlparse(url).netloc}: {e}"
+                                )
+                            finally:
+                                progress.advance(task)
+
+                    await asyncio.gather(
+                        *(scrape_one(url, i) for i, url in enumerate(urls))
+                    )
+
             console.print(
-                f"\n[bold green]Success![/bold green] Extracted {len(all_jobs)} jobs to {output}"
+                f"\n[bold green]Success![/bold green] Appended results to {output}. Total scraped in this run: {scraped_count}"
             )
         finally:
             await client.close()
