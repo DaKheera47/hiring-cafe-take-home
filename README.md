@@ -42,6 +42,39 @@ This is the bit that has the most room for improvement.
 
 The project brief asked to expand coverage, so I didn't use just the existing URLs. I implemented a discovery module that queries Certificate Transparency Logs (`crt.sh`) for wildcard certificates (`%.avature.net`). This allowed us to uncover internal and unlisted career portals that weren't in the public seed list, but this required cleaning as some of the domains were not valid anymore or were not career portals.
 
+## Trade-offs
+
+WAFs are probabilistic beasts. Even with a perfect TLS handshake, sometimes Akamai just decides it doesn't like your face (or in this case, your IP). I deliberately chose Architecture over Infrastructure. I didn't hook this up to a massive rotating residential proxy network because, well, I don't have a corporate credit card for this assignment. That means if you hammer a domain too hard, you might still catch a temporary timeout. The retry timeouts are large enough that the script will eventually get the data, but it might take a while.
+
+To avoid this, I made the Resume System. If the script hits a brick wall, it gracefully saves its state and exits. You just grab a coffee, hit run again, and it picks up exactly where it left off. It’s not a crash; it’s a tactical pause.
+
+## How to Run
+
+This project uses `uv` for fast dependency management and execution.
+
+1. **Install dependencies:**
+
+   ```bash
+   uv sync
+   ```
+
+2. **Discover Portals:** (Clean seed list & find new ones via CT logs)
+
+   ```bash
+   uv run main.py discover
+   ```
+
+3. **Harvest URLs:** (Find individual job links from discovered portals)
+
+   ```bash
+   uv run main.py harvest
+   ```
+
+4. **Scrape Jobs:** (Extract details to `output/v2_jobs.jsonl`)
+   ```bash
+   uv run main.py scrape --concurrency 20
+   ```
+
 ---
 
 _PSA: I really enjoyed working on this project, job or not! Thanks for the challenge Hamed!_ 🚀
