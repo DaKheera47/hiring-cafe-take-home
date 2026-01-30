@@ -272,15 +272,39 @@ def scrape(input, output, limit, concurrency):
     with open(input, "r") as f:
         urls = [line.strip() for line in f if line.strip()]
 
-    # only for testing
+    # --- Domain Interleaving Logic ---
+    # To avoid rate-limiting, we group by domain and interleave the URLs
+    from collections import defaultdict
+
+    domain_map = defaultdict(list)
+    for url in urls:
+        domain = urlparse(url).netloc
+        domain_map[domain].append(url)
+
+    # Shuffle URLs within each domain
     import random
 
-    random.shuffle(urls)
+    for domain in domain_map:
+        random.shuffle(domain_map[domain])
+
+    # Interleave (Round-Robin)
+    interleaved_urls = []
+    max_len = max(len(v) for v in domain_map.values()) if domain_map else 0
+    domains_list = list(domain_map.keys())
+    # We shuffle domain order too for extra randomness
+    random.shuffle(domains_list)
+
+    for i in range(max_len):
+        for domain in domains_list:
+            if i < len(domain_map[domain]):
+                interleaved_urls.append(domain_map[domain][i])
+
+    urls = interleaved_urls
 
     if limit and limit > 0:
         urls = urls[:limit]
         console.print(
-            f"[bold yellow]Testing Mode:[/bold yellow] Restricted to {len(urls)} random jobs."
+            f"[bold yellow]Testing Mode:[/bold yellow] Using {len(urls)} interleaved jobs from {len(domain_map)} domains."
         )
 
     async def scrape_jobs():
