@@ -8,7 +8,27 @@ logger = logging.getLogger(__name__)
 
 
 class PortalDiscovery:
-    """Discovers and normalizes Avature portal domains."""
+    """Discovers and normalizes Avature portal domains with public-only filtering."""
+
+    BLACKLIST_KEYWORDS = (
+        "sandbox",
+        "training",
+        "uat",
+        "qa",
+        "staging",
+        "dev",
+        "test-",
+        "-test",
+        "internal",
+        "integrations",
+        "mobiletrust",
+        "api-",
+        "preview",
+        "demo-",
+        "-demo",
+        "portal-uat",
+        "portal-stage",
+    )
 
     @staticmethod
     def normalize_to_base(url: str) -> Optional[str]:
@@ -21,7 +41,10 @@ class PortalDiscovery:
 
         try:
             parsed = urlparse(url)
-            if "avature.net" in parsed.netloc:
+            netloc = parsed.netloc.lower()
+            if "avature.net" in netloc:
+                if any(k in netloc for k in PortalDiscovery.BLACKLIST_KEYWORDS):
+                    return None
                 return f"{parsed.scheme}://{parsed.netloc}"
         except Exception:
             pass
@@ -34,7 +57,6 @@ class PortalDiscovery:
         logger.info("Querying Certificate Transparency logs for new portals...")
         domains = set()
 
-        # crt.sh is very sensitive to fingerprints and often throws 503s
         for attempt in range(1, 4):
             try:
                 async with AsyncSession(impersonate="chrome") as session:
@@ -51,10 +73,13 @@ class PortalDiscovery:
                                 if subname.startswith("*."):
                                     subname = subname[2:]
                                 if subname.endswith(".avature.net"):
-                                    domains.add(f"https://{subname}")
+                                    if not any(
+                                        k in subname for k in self.BLACKLIST_KEYWORDS
+                                    ):
+                                        domains.add(f"https://{subname}")
 
                         logger.info(
-                            f"CT logs successful: found {len(domains)} raw domains."
+                            f"CT logs successful: found {len(domains)} raw candidates."
                         )
                         return domains
                     elif resp.status_code == 503:
@@ -74,44 +99,83 @@ class PortalDiscovery:
     async def validate_portals(
         self, urls: List[str], concurrency: int = 10
     ) -> List[str]:
-        """Validates portals in parallel to ensure they are active Avature sites."""
+        """Validates portals in parallel to ensure they are active public Avature sites."""
         logger.info(f"Validating {len(urls)} portals with concurrency={concurrency}...")
-        valid_urls = []
         semaphore = asyncio.Semaphore(concurrency)
 
         async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             tasks = [self._check_url(client, url, semaphore) for url in urls]
             results = await asyncio.gather(*tasks)
-            # Use a set to deduplicate final URLs (e.g., if http and https both redirect to the same canonical URL)
             valid_urls = {url for url in results if url}
 
         logger.info(
-            f"Validation complete: {len(valid_urls)}/{len(urls)} unique valid portals found."
+            f"Validation complete: {len(valid_urls)}/{len(urls)} unique public portals found."
         )
         return sorted(list(valid_urls))
 
     async def _check_url(
         self, client: httpx.AsyncClient, url: str, semaphore: asyncio.Semaphore
     ) -> Optional[str]:
-        """Checks if a URL is a valid Avature portal and follows redirects to the final destination."""
+        """Checks if a URL is a valid public Avature career portal by checking base and /careers path."""
         async with semaphore:
-            try:
-                response = await client.get(url)
-                if response.status_code == 200:
-                    # Final landing page after redirects
-                    final_url = str(response.url).rstrip("/")
+            # We try the base URL first, then /careers if the base doesn't look like a portal
+            paths_to_try = ["", "/careers"]
 
-                    # Log if it was a significant move
-                    if final_url.lower() != url.lower().rstrip("/"):
-                        logger.info(f"Redirect: {url} -> {final_url}")
+            for path in paths_to_try:
+                try:
+                    target_url = url.rstrip("/") + path
+                    response = await client.get(target_url, timeout=10)
 
-                    # Check for Avature footprint
-                    if "avature" in response.text.lower() or "avature" in str(
-                        response.headers
-                    ):
-                        return final_url
-                else:
-                    logger.debug(f"Failed to validate {url}: {response.status_code}")
-            except Exception as e:
-                logger.debug(f"Error checking {url}: {e}")
+                    if response.status_code == 200:
+                        html = response.text.lower()
+                        final_url = str(response.url).rstrip("/")
+
+                        # Check for general Avature footprint
+                        is_avature = (
+                            "avature" in html
+                            or "avature" in str(response.headers).lower()
+                        )
+
+                        if not is_avature:
+                            continue
+
+                        # Filter out internal/noindex pages
+                        if (
+                            'content="noindex"' in html
+                            or 'name="robots" content="none"' in html
+                        ):
+                            continue
+
+                        # Check for public signatures
+                        # Broaden signatures to catch more portals
+                        public_sigs = [
+                            "job search",
+                            "career",
+                            "search jobs",
+                            "view all jobs",
+                            "talent community",
+                            "opportunities",
+                            "positions",
+                            "jobdetail",
+                            "portal",
+                            "employment",
+                        ]
+                        is_public = any(sig in html for sig in public_sigs)
+
+                        # Special case: If the page has a JS redirect to /Login/ on the SAME domain, it's likely internal
+                        if "window.location.href" in html and "/login/" in html:
+                            # If we are at the base and it redirects to login, it might be internal
+                            # but we'll still let it pass for /careers if that works
+                            if path == "" and "/careers" not in html:
+                                continue
+
+                        if is_avature and (is_public or path == "/careers"):
+                            if final_url.lower() != url.lower().rstrip("/"):
+                                logger.info(f"Detected: {url} -> {final_url}")
+                            return final_url
+
+                except Exception as e:
+                    logger.debug(f"Error checking {url}{path}: {e}")
+
+        return None
         return None

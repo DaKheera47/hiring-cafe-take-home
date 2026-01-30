@@ -1,59 +1,66 @@
 # Technical Submission: Avature Adaptive Scraper Engine (V2)
 
 **Candidate:** [Your Name]  
-**Approach:** Distributed Async Engine with Sitemap Harvesting  
-**Execution Time:** ~6 hours (V2 Refactor)
+**Approach:** Distributed Async Engine with Sitemap Harvesting & Automated CT Resource Discovery  
+**Execution Time:** ~8 hours (V2 Refactor & Discovery Optimization)
 
 ---
 
 ## 🚀 Executive Summary
 
-This project implements a high-performance, asynchronous scraping engine designed for industrial-scale job extraction from the Avature ecosystem.
+This project implements a high-performance, asynchronous scraping engine designed for industrial-scale job extraction from the Avature ecosystem. It represents a significant architectural leap from standard procedural scrapers by implementing automated portal discovery via Certificate Transparency (CT) logs and a high-fidelity parsing pipeline.
 
 **Key Technical Achievements:**
 
-- **Zero-Config Discovery:** Developed a `SitemapExplorer` that bypasses search page limitations by harvesting XML sitemaps via `robots.txt` discovery.
-- **Async Efficiency:** Built on `httpx` and `asyncio`, the engine handles concurrent processing of hundreds of domains with minimal memory footprint.
-- **Structured Data Priority:** Implements a parsing pipeline that prioritizes **JSON-LD (Schema.org)** metadata over fragile HTML selectors, ensuring high data fidelity even when site layouts change.
-- **Robust Modeling:** Utilizes **Pydantic** for runtime data validation and schema enforcement.
+- **Automated Resource Discovery:** Built a "Portal Hunter" that queries CT logs via `curl_cffi` (bypassing WAF/503 limits) to discover all active `*.avature.net` subdomains.
+- **Multistage Validation:** Implemented a parallel validator that filters out internal, sandbox, and "noindex" sites using signature verification and heuristic blacklisting.
+- **Async Efficiency:** Engineered on `uv`, `httpx`, and `asyncio`, the engine handles concurrent processing of hundreds of domains with ultra-low memory overhead.
+- **Structured Data Priority:** Prioritizes **JSON-LD (Schema.org)** metadata, ensuring high data fidelity even when site layouts change.
 
 ---
 
 ## 🛠 Architecture & Engineering Logic
 
-### 1. The "Sitemap-First" Discovery Strategy
+### 1. Dual-Stage Discovery Pipeline
 
-The primary challenge with Avature (and most ATS platforms) is that the "Search" UI often caps results at 500–1,000 jobs. To achieve **100% inventory coverage**, I implemented a sitemap harvesting strategy:
+The system overcomes the "seed list limitation" by programmatically expanding its reach:
 
-1.  **Robots.txt Analysis:** Fetch `/robots.txt` for every discovered domain.
-2.  **Sitemap Traversal:** Identify `sitemap_index.xml` and traverse sub-sitemaps specifically tagged for jobs.
-3.  **Direct URL Extraction:** Extract permanent `/JobDetail/` URLs directly from XML, bypassing the need for slow, page-by-page DOM interaction.
+- **Phase A (Harvesting):** Queries Certificate Transparency logs for every SSL certificate issued to `avature.net` subdomains. This expanded the starter pack from ~5 seed URLs to **400+ validated public portals**.
+- **Phase B (Filtration):** Uses a sophisticated blacklist (sandbox, uat, internal) and content-signature check (searching for "Job Search", "Career opportunities") to ensure only public-facing portals are targeted.
 
-### 2. High-Performance Async Client
+### 2. The "Sitemap-First" Extraction Strategy
 
-Unlike standard procedural scrapers, this engine uses a custom `AsyncClient` wrapper around `httpx`:
+Most Avature portals cap search UI results at 500–1,000 jobs. To achieve **100% inventory coverage**:
 
-- **Connection Pooling:** Maintains persistent TCP connections to reduce handshake overhead.
-- **Adaptive Throttling:** Built-in limits on concurrent connections to avoid triggering anti-bot protection while maintaining speed.
-- **Error Resilience:** Systematic handling of SSL/TLS edge cases common in enterprise portals.
+- **Robots.txt Analysis:** The engine automatically finds and parses XML sitemaps.
+- **Direct Link Traversal:** It extracts permanent `/JobDetail/` URLs directly from XML, bypassing slow and fragile UI pagination.
 
-### 3. The Parsing Pipeline (Polyglot Parser)
+### 3. Resilience & Fingerprinting (`curl_cffi`)
 
-Website parsing is traditionally the most fragile part of a scraper. V2 solves this by using a prioritized pipeline:
+To handle sensitive endpoints like `crt.sh` which often block standard bots:
 
-- **Tier 1 (JSON-LD):** The engine first looks for `<script type="application/ld+json">`. This provides clean, structured data intended for Google Jobs.
-- **Tier 2 (Fallback Heuristics):** If structured data is missing, the engine falls back to a CSS-independent text extraction layer.
+- Implemented `curl_cffi` with **Chrome impersonation** to maintain a perfect TLS fingerprint.
+- Added adaptive retries and backoff logic to handle `503 Service Unavailable` errors gracefully.
+
+### 4. Polyglot Parsing Engine
+
+Parsing is handled by a prioritized pipeline:
+
+- **Tier 1 (JSON-LD):** Extracts clean, machine-readable data intended for Google Jobs.
+- **Tier 2 (BeautifulSoup Fallback):** Uses heuristic text extraction if structured data is absent.
+- **Validation:** Uses **Pydantic** to enforce schema strictness before data is saved.
 
 ---
 
 ## 📊 Comparison with Standard Approaches
 
-| Feature           | Standard "Script" Scrapers       | **Avature Engine V2 (This Solution)**    |
-| :---------------- | :------------------------------- | :--------------------------------------- |
-| **Concurrency**   | Threads/Processes (Heavy)        | **Async Events (Ultra-Lightweight)**     |
-| **Dataset Depth** | UI Page Limits (Partial)         | **Sitemap Harvesting (Total Inventory)** |
-| **Reliability**   | CSS Selectors (High Maintenance) | **JSON-LD / Schema (Self-Healing)**      |
-| **UX**            | Console Logs                     | **Interactive Rich CLI**                 |
+| Feature           | Standard "Script" Scrapers | **Avature Engine V2 (This Solution)**    |
+| :---------------- | :------------------------- | :--------------------------------------- |
+| **Discovery**     | Manual / Fixed Seed List   | **Automated (CT Logs + DNS)**            |
+| **Concurrency**   | Threads/Processes (Heavy)  | **Async Events (Ultra-Lightweight)**     |
+| **Dataset Depth** | UI Page Limits (Partial)   | **Sitemap Harvesting (Total Inventory)** |
+| **Bypass Logic**  | Standard User-Agents       | **Chrome TLS Fingerprinting**            |
+| **Reliability**   | CSS Selectors (Fragile)    | **JSON-LD / Schema (Robust)**            |
 
 ---
 
@@ -61,32 +68,43 @@ Website parsing is traditionally the most fragile part of a scraper. V2 solves t
 
 ```text
 .
-├── main.py              # CLI Entry point (click & rich)
-├── input/               # Seed domains list (e.g., domains.txt)
-├── output/              # Final JSONL datasets
-├── scraper/             # The Core Package
-│   ├── client.py        # Async HTTP engine
-│   ├── discovery.py     # Sitemap & robots logic
+├── main.py              # CLI Entry point (discover/scrape commands)
+├── pyproject.toml       # UV modern dependency management
+├── uv.lock              # Deterministic lockfile
+├── input/
+│   ├── urls.txt         # Raw seed list (can be messy URLs)
+│   └── domains.txt      # Clean, validated, public base portals
+├── scraper/             # Core Package
+│   ├── client.py        # Async HTTP client wrapper
+│   ├── discovery.py     # Sitemap traversal logic
+│   ├── portal_discovery.py # CT logs & validation hunter
 │   ├── parsing.py       # JSON-LD & DOM extraction
 │   └── models.py        # Pydantic data schemas
-└── requirements.txt     # Modern dependency tree
 ```
 
 ---
 
 ## ⚡ Instructions to Run
 
-1. **Install Dependencies:**
+This project uses **`uv`** for high-performance dependency management.
+
+1. **Install/Sync Dependencies:**
 
    ```bash
-   pip install -r requirements.txt
+   uv sync
    ```
 
-2. **Run the Engine:**
+2. **Run Discovery (Cleans urls.txt & finds new portals via CT):**
 
    ```bash
-   python main.py --input input/domains.txt --output output/jobs.jsonl
+   uv run main.py discover
    ```
 
-3. **Check the Output:**
-   The output is a flat JSONL file where each line is a validated `JobEntry` object, ready for database ingestion.
+3. **Run Scraper (Harvests jobs from validated portals):**
+
+   ```bash
+   uv run main.py scrape
+   ```
+
+4. **Check the Output:**
+   Results are saved to `output/v2_jobs.jsonl` in a standardized, database-ready format.
