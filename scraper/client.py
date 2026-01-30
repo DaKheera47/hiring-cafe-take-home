@@ -103,7 +103,7 @@ class AsyncClient:
                 )
 
                 if response.status_code == 200:
-                    logger.info(f"Successfully fetched {url} (200 OK)")
+                    # Removed URL logging as requested
                     return response
 
                 if response.status_code == 404:
@@ -112,8 +112,11 @@ class AsyncClient:
                 if response.status_code in [406, 403, 429]:
                     if attempt < max_retries:
                         sleep_time = retry_delay * (2**attempt) + random.uniform(2, 5)
+                        from urllib.parse import urlparse
+
+                        domain = urlparse(url).netloc
                         logger.warning(
-                            f"Rate limited ({response.status_code}) on {url}. Retrying in {sleep_time:.2f}s (Attempt {attempt + 1}/{max_retries})"
+                            f"Rate limited ({response.status_code}) on {domain}. Retrying in {sleep_time:.2f}s (Attempt {attempt + 1}/{max_retries})"
                         )
                         # Rotate session on block
                         try:
@@ -129,8 +132,11 @@ class AsyncClient:
                         await asyncio.sleep(sleep_time)
                         continue
                     else:
+                        from urllib.parse import urlparse
+
+                        domain = urlparse(url).netloc
                         logger.error(
-                            f"Failed to fetch {url} after {max_retries} retries ({response.status_code})."
+                            f"Failed to fetch {domain} after {max_retries} retries ({response.status_code})."
                         )
                         return None
 
@@ -140,7 +146,10 @@ class AsyncClient:
                 if attempt < max_retries:
                     await asyncio.sleep(retry_delay * (2**attempt))
                     continue
-                logger.error(f"Error fetching {url}: {str(e)}")
+                from urllib.parse import urlparse
+
+                domain = urlparse(url).netloc
+                logger.error(f"Error fetching {domain}: {str(e)}")
                 return None
 
         return None

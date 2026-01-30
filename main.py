@@ -12,6 +12,8 @@ from rich.progress import (
     TextColumn,
     BarColumn,
     TaskProgressColumn,
+    TimeRemainingColumn,
+    MofNCompleteColumn,
 )
 from rich.logging import RichHandler
 
@@ -330,7 +332,9 @@ def scrape(input, output, limit, concurrency):
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(),
+                MofNCompleteColumn(),
                 TaskProgressColumn(),
+                TimeRemainingColumn(),
                 console=console,
                 transient=True,
             ) as progress:
@@ -363,13 +367,31 @@ def scrape(input, output, limit, concurrency):
                                 )
                                 if job:
                                     all_jobs.append(job)
-                                    completed = int(progress.tasks[task].completed) + 1
-                                    total = int(progress.tasks[task].total)
+                                    # Update count
+                                    p_task = progress.tasks[task]
+                                    completed = int(p_task.completed) + 1
+                                    total = int(p_task.total)
+
+                                    # Calculate ETA
+                                    elapsed = p_task.elapsed or 0.1
+                                    rate = (
+                                        p_task.completed / elapsed if elapsed > 0 else 0
+                                    )
+                                    remaining = total - completed
+                                    eta_secs = remaining / rate if rate > 0 else 0
+
+                                    if eta_secs > 3600:
+                                        eta_str = f"{int(eta_secs // 3600)}h {int((eta_secs % 3600) // 60)}m"
+                                    elif eta_secs > 60:
+                                        eta_str = f"{int(eta_secs // 60)}m {int(eta_secs % 60)}s"
+                                    else:
+                                        eta_str = f"{int(eta_secs)}s"
+
                                     logger.info(
-                                        f"[[bold blue]{completed}/{total}[/bold blue]] [bold green]✓[/bold green] Scraped: [cyan]{job.title}[/cyan] ([bold]{job.company}[/bold])"
+                                        f"[[bold blue]{completed}/{total}[/bold blue]] [bold yellow]ETA: {eta_str}[/bold yellow] [bold green]✓[/bold green] Scraped: [cyan]{job.title}[/cyan] ([bold]{job.company}[/bold])"
                                     )
                         except Exception as e:
-                            logger.error(f"Error scraping {url}: {e}")
+                            logger.error(f"Error scraping {urlparse(url).netloc}: {e}")
                         finally:
                             progress.advance(task)
 
