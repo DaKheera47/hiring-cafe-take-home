@@ -1,0 +1,17 @@
+[project]
+name = "avature-scraper-main"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "click>=8.3.1",
+    "dnspython>=2.8.0",
+    "extruct>=0.18.0",
+    "httpx>=0.28.1",
+    "lxml>=6.0.2",
+    "pydantic>=2.12.5",
+    "rich>=14.3.1",
+    "tqdm>=4.67.1",
+]
