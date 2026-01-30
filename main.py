@@ -363,8 +363,10 @@ def scrape(input, output, limit, concurrency):
                                 )
                                 if job:
                                     all_jobs.append(job)
+                                    completed = int(progress.tasks[task].completed) + 1
+                                    total = int(progress.tasks[task].total)
                                     logger.info(
-                                        f"[bold green]✓[/bold green] Scraped: [cyan]{job.title}[/cyan] ([bold]{job.company}[/bold])"
+                                        f"[[bold blue]{completed}/{total}[/bold blue]] [bold green]✓[/bold green] Scraped: [cyan]{job.title}[/cyan] ([bold]{job.company}[/bold])"
                                     )
                         except Exception as e:
                             logger.error(f"Error scraping {url}: {e}")
