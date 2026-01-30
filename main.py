@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import json
 from pathlib import Path
 from typing import List
 from urllib.parse import urlparse
@@ -315,6 +316,36 @@ def scrape(input, output, limit, concurrency):
                 interleaved_urls.append(domain_map[domain][i])
 
     urls = interleaved_urls
+
+    # --- Resume Support ---
+    # Check if we already have some jobs in the output file
+    output_path = Path(output)
+    existing_urls = set()
+    if output_path.exists():
+        console.print(f"[yellow]Checking {output} for existing jobs...[/yellow]")
+        with open(output_path, "r") as f:
+            for line in f:
+                try:
+                    data = json.loads(line)
+                    if "application_url" in data:
+                        existing_urls.add(data["application_url"])
+                except Exception:
+                    continue
+
+        if existing_urls:
+            original_count = len(urls)
+            urls = [u for u in urls if u not in existing_urls]
+            skipped = original_count - len(urls)
+            if skipped > 0:
+                console.print(
+                    f"[green]Resuming:[/green] Skipping {skipped} already scraped URLs. Remaining: {len(urls)}"
+                )
+
+    if not urls:
+        console.print(
+            "[bold green]All URLs already scraped! No work to do.[/bold green]"
+        )
+        return
 
     if limit and limit > 0:
         urls = urls[:limit]
