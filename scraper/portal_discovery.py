@@ -28,23 +28,46 @@ class PortalDiscovery:
         return None
 
     async def discover_from_ct_logs(self) -> Set[str]:
-        """Query Certificate Transparency logs for *.avature.net."""
+        """Query Certificate Transparency logs for *.avature.net using curl_cffi for better fingerprinting."""
+        from curl_cffi.requests import AsyncSession
+
         logger.info("Querying Certificate Transparency logs for new portals...")
         domains = set()
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get("https://crt.sh/?q=%.avature.net&output=json")
-                if resp.status_code == 200:
-                    data = resp.json()
-                    for entry in data:
-                        name = entry.get("name_value", "").lower()
-                        for subname in name.split("\n"):
-                            if subname.startswith("*."):
-                                subname = subname[2:]
-                            if subname.endswith(".avature.net"):
-                                domains.add(f"https://{subname}")
-        except Exception as e:
-            logger.error(f"CT log discovery failed: {e}")
+
+        # crt.sh is very sensitive to fingerprints and often throws 503s
+        for attempt in range(1, 4):
+            try:
+                async with AsyncSession(impersonate="chrome") as session:
+                    url = "https://crt.sh/?q=%.avature.net&output=json"
+                    logger.info(f"CT logs attempt {attempt}/3...")
+
+                    resp = await session.get(url, timeout=60)
+
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        for entry in data:
+                            name = entry.get("name_value", "").lower()
+                            for subname in name.split("\n"):
+                                if subname.startswith("*."):
+                                    subname = subname[2:]
+                                if subname.endswith(".avature.net"):
+                                    domains.add(f"https://{subname}")
+
+                        logger.info(
+                            f"CT logs successful: found {len(domains)} raw domains."
+                        )
+                        return domains
+                    elif resp.status_code == 503:
+                        logger.warning(
+                            f"CT logs returned 503 (Attempt {attempt}). Backing off..."
+                        )
+                        await asyncio.sleep(attempt * 5)
+                    else:
+                        logger.warning(f"CT logs returned status {resp.status_code}")
+
+            except Exception as e:
+                logger.error(f"CT log discovery attempt {attempt} failed: {e}")
+                await asyncio.sleep(attempt * 2)
 
         return domains
 
