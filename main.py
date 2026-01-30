@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import List, Set
+from typing import List
 from urllib.parse import urlparse
 
 import click
@@ -262,10 +262,15 @@ def scrape(input, output, limit):
     with open(input, "r") as f:
         urls = [line.strip() for line in f if line.strip()]
 
+    # only for testing
+    import random
+
+    random.shuffle(urls)
+
     if limit and limit > 0:
         urls = urls[:limit]
         console.print(
-            f"[bold yellow]Testing Mode:[/bold yellow] Restricted to {len(urls)} jobs."
+            f"[bold yellow]Testing Mode:[/bold yellow] Restricted to {len(urls)} random jobs."
         )
 
     async def scrape_jobs():
