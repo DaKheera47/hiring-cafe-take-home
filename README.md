@@ -12,9 +12,9 @@ I focused on ensuring I got around the WAFs in place, more than the data extract
 
 ---
 
-## 🧙‍♂️ The "Dark Arts" (How We Beat the WAF)
+## Scraper
 
-Avature is smart. They use aggressive WAFs (i think Akamai?), TLS fingerprinting, and strict HTTP/2 validation to crush bots. Here is the engineering magic under the hood:
+Avature is smart. They use aggressive WAFs (i think Akamai?), TLS fingerprinting, and strict HTTP/2 validation to deter bots. Here is the engineering implementation details in short:
 
 ### 1. Bypassing the "406 Not Acceptable" of Death
 
@@ -36,10 +36,12 @@ Some Avature sites are modern (React/JSON), while others are... vintage (Server-
 2. **Tier 2:** Attempts to inject into the Internal JSON API (`/SearchJobsData`) using the cached session.
 3. **Tier 3:** Falls back to a Heuristic DOM Parser that aggregates fragmented HTML descriptions (handling quirks like the Consumer Direct Care site).
 
-### 5. Going Beyond the List (Recon)
+This is the bit that has the most room for improvement.
 
-The project brief asked to expand coverage, so I didn't just use the existing URLs. I implemented a discovery module that queries Certificate Transparency Logs (`crt.sh`) for wildcard certificates (`%.avature.net`). This allowed us to uncover internal and unlisted career portals that weren't in the public seed list.
+## Domain Discovery
+
+The project brief asked to expand coverage, so I didn't use just the existing URLs. I implemented a discovery module that queries Certificate Transparency Logs (`crt.sh`) for wildcard certificates (`%.avature.net`). This allowed us to uncover internal and unlisted career portals that weren't in the public seed list, but this required cleaning as some of the domains were not valid anymore or were not career portals.
 
 ---
 
-_Basically: We brought a tank to a knife fight. Enjoy the data._ 🚀
+_PSA: I really enjoyed working on this project, job or not! Thanks for the challenge Hamed!_ 🚀
