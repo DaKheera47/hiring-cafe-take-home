@@ -25,7 +25,7 @@ logging.basicConfig(
     level="INFO",
     format="%(message)s",
     datefmt="[%X]",
-    handlers=[RichHandler(console=console, rich_tracebacks=True)],
+    handlers=[RichHandler(console=console, rich_tracebacks=True, markup=True)],
 )
 logger = logging.getLogger("avature")
 
@@ -36,16 +36,24 @@ async def process_domain(domain: str, client: AsyncClient, discovery: DiscoveryE
     if not job_urls:
         return []
 
+    def get_company_name(url):
+        netloc = urlparse(url).netloc
+        if "avature.net" in netloc:
+            return netloc.replace(".avature.net", "").title()
+        return netloc.split(".")[1].title() if "." in netloc else netloc.title()
+
     jobs = []
     # Scraping phase
     for url in list(job_urls)[:100]:  # Limit for POC
         resp = await client.get(url)
         if resp:
-            job = JobParser.extract_from_html(
-                resp.text, url, domain.split(".")[0].title()
-            )
+            company = get_company_name(url)
+            job = JobParser.extract_from_html(resp.text, url, company)
             if job:
                 jobs.append(job)
+                logger.info(
+                    f"[bold green]✓[/bold green] Scraped: [cyan]{job.title}[/cyan] ([bold]{job.company}[/bold])"
+                )
 
     return jobs
 
@@ -333,19 +341,31 @@ def scrape(input, output, limit, concurrency):
                         # Staggered start to avoid concurrent bursts
                         await asyncio.sleep(index * 0.1 % 2)
 
-                        progress.update(
-                            task,
-                            description=f"[cyan]Scraping:[/cyan] {urlparse(url).netloc}...",
-                        )
                         try:
                             resp = await client.get(url)
                             if resp:
-                                domain = urlparse(url).netloc
+                                netloc = urlparse(url).netloc
+                                if "avature.net" in netloc:
+                                    company_guess = netloc.replace(
+                                        ".avature.net", ""
+                                    ).title()
+                                else:
+                                    # Fallback for vanity domains (talent.company.com)
+                                    parts = netloc.split(".")
+                                    company_guess = (
+                                        parts[-2].title()
+                                        if len(parts) > 1
+                                        else netloc.title()
+                                    )
+
                                 job = JobParser.extract_from_html(
-                                    resp.text, url, domain.split(".")[0].title()
+                                    resp.text, url, company_guess
                                 )
                                 if job:
                                     all_jobs.append(job)
+                                    logger.info(
+                                        f"[bold green]✓[/bold green] Scraped: [cyan]{job.title}[/cyan] ([bold]{job.company}[/bold])"
+                                    )
                         except Exception as e:
                             logger.error(f"Error scraping {url}: {e}")
                         finally:

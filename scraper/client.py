@@ -103,6 +103,7 @@ class AsyncClient:
                 )
 
                 if response.status_code == 200:
+                    logger.info(f"Successfully fetched {url} (200 OK)")
                     return response
 
                 if response.status_code == 404:
