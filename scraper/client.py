@@ -172,7 +172,7 @@ class AsyncClient:
 
         Uses domain-cached sessions and Firefox 117 fingerprint.
         """
-        base_delay = 30.0  # Base delay before exponential backoff
+        base_delay = 60.0  # Base delay before exponential backoff
         base_url = urlparse(url)
         referer = f"{base_url.scheme}://{base_url.netloc}/careers"
 
