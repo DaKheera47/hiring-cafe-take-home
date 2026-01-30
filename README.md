@@ -1,39 +1,45 @@
-# Avature Adaptive Scraper Engine V2
+# Take home assignment to scrape Avature
 
-A high-performance scraping infrastructure for extracting job inventory across the Avature ecosystem. Engineered for speed, discovery, and reliability.
+- took about 6 hours to do, with all sorts of ai assistance
+- used tls_client to bypass waf
+- used asyncio to speed up the process
+- found 19333 jobs from 110 company domains (this low number is because some base domains in the provided list were not valid anymore)
+- scraper has resumability support
 
-## 🚀 Quick Start
+This project aims to scrape job inventory from Avature portals using a combination of techniques to bypass WAFs and extract job data. I found several hurdles along the way, which i've documented below. I won't bother mentioning simple things like preferring web requests vs spinning up a full-blown web browser, etc. I'll instead mention the more complex hurdles that I overcame for Avature specifically.
 
-1. **Setup:**
+I focused on ensuring I got around the WAFs in place, more than the data extraction process, as that can be improved more easily, once we have the HTML available to us. Thus, please ignore any incorrect job titles or things that may have ended up in the final data.
 
-   ```bash
-   uv sync
-   ```
+---
 
-2. **Discover:** (Analyze raw URLs and find new portals via CT logs)
+## 🧙‍♂️ The "Dark Arts" (How We Beat the WAF)
 
-   ```bash
-   uv run main.py discover
-   ```
+Avature is smart. They use aggressive WAFs (i think Akamai?), TLS fingerprinting, and strict HTTP/2 validation to crush bots. Here is the engineering magic under the hood:
 
-3. **Scrape:** (Harvest jobs from validated portals)
-   ```bash
-   uv run main.py scrape
-   ```
+### 1. Bypassing the "406 Not Acceptable" of Death
 
-## 🛠 Features
+If you hit these sites with standard Python tools, you get a hard `406` error because the WAF checks your TLS Fingerprint. I swapped the transport layer for `tls_client` and strictly emulated the Firefox 117 cryptographic handshake (ciphers, extensions, curves). To the WAF, we are a legitimate browser as much as possible.
 
-- **Automated Discovery:** Queries Certificate Transparency logs to find hundreds of active Avature portals beyond the starter pack.
-- **Validation Engine:** Automatically filters out sandboxes, internal portals, and "noindex" sites using signature verification.
-- **Sitemap Harvesting:** Bypasses search UI limitations to capture 100% of job inventory via XML sitemaps.
-- **Async Speed:** Built with `httpx` and `asyncio` for high-concurrency processing with minimal memory footprint.
-- **Structured Extraction:** Prioritizes **JSON-LD (Schema.org)** data for perfect fidelity, falling back to heuristic parsing only when necessary.
-- **Fingerprint Bypass:** Uses `curl_cffi` for browser impersonation to bypass bot detection on sensitive endpoints.
+### 2. The HTTP/2 Protocol Violation
 
-## 📁 Project Structure
+Even with the right fingerprint, we were initially blocked. It turns out that sending a `Connection: keep-alive` header over an HTTP/2 stream is technically illegal (per RFC 7540), but standard libraries do it anyway. The WAF was using this protocol violation to flag us. I made a custom header order that is strictly compliant, and this brought down the block rate.
 
-- `main.py`: Command-line interface.
-- `scraper/portal_discovery.py`: logic for finding and validating portals.
-- `scraper/discovery.py`: logic for traversing sitemaps and finding job links.
-- `scraper/parsing.py`: logic for extracting data from job pages.
-- `pyproject.toml`: Modern dependency management.
+### 3. The "Secret Handshake" (Session Caching)
+
+Avature is stateful. You can't just hit an API endpoint directly; you need a specific session cookie (`ScustomPortal-ID`) that is only granted after a valid homepage visit. I implemented a Domain-Scoped Session Cache that performs this expensive "Cookie Handshake" once per domain, caches this _blessed_ session, and reuses it for thousands of subsequent API calls. This means that the script starts slow, but gets faster and faster as it caches more sessions.
+
+### 4. The "Polymorphic" Extractor
+
+Some Avature sites are modern (React/JSON), while others are... vintage (Server-side HTML). The scraper uses a waterfall strategy:
+
+1. **Tier 1:** Checks for JSON-LD (Structured Data).
+2. **Tier 2:** Attempts to inject into the Internal JSON API (`/SearchJobsData`) using the cached session.
+3. **Tier 3:** Falls back to a Heuristic DOM Parser that aggregates fragmented HTML descriptions (handling quirks like the Consumer Direct Care site).
+
+### 5. Going Beyond the List (Recon)
+
+The project brief asked to expand coverage, so I didn't just use the existing URLs. I implemented a discovery module that queries Certificate Transparency Logs (`crt.sh`) for wildcard certificates (`%.avature.net`). This allowed us to uncover internal and unlisted career portals that weren't in the public seed list.
+
+---
+
+_Basically: We brought a tank to a knife fight. Enjoy the data._ 🚀
