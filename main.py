@@ -1,7 +1,8 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Set
+from urllib.parse import urlparse
 
 import click
 from rich.console import Console
@@ -19,28 +20,21 @@ from scraper.discovery import DiscoveryEngine
 from scraper.parsing import JobParser
 
 # Set up beautiful logging
+console = Console()
 logging.basicConfig(
     level="INFO",
     format="%(message)s",
     datefmt="[%X]",
-    handlers=[RichHandler(rich_tracebacks=True)],
+    handlers=[RichHandler(console=console, rich_tracebacks=True)],
 )
 logger = logging.getLogger("avature")
-console = Console()
 
 
 async def process_domain(domain: str, client: AsyncClient, discovery: DiscoveryEngine):
-    logger.info(f"[bold blue]Processing domain:[/bold blue] {domain}")
-
     # Discovery phase
     job_urls = await discovery.find_job_urls_from_sitemap(domain)
     if not job_urls:
-        logger.warning(
-            f"No sitemap jobs found for {domain}. Falling back to API discovery would go here."
-        )
         return []
-
-    logger.info(f"Found {len(job_urls)} jobs for {domain}")
 
     jobs = []
     # Scraping phase
@@ -68,25 +62,71 @@ async def run_scraper(domains: List[str], output_file: str):
             BarColumn(),
             TaskProgressColumn(),
             console=console,
+            transient=True,
         ) as progress:
-            task = progress.add_task(
-                "[cyan]Scraping Avature Ecosystem...", total=len(domains)
-            )
+            task = progress.add_task("[cyan]Scraping Jobs...", total=len(domains))
 
             for domain in domains:
-                # We could use asyncio.gather for even more speed, but let's keep it readable
+                progress.update(
+                    task,
+                    description=f"[cyan]Scraping:[/cyan] [bold]{urlparse(domain).netloc}[/bold]",
+                )
                 domain_jobs = await process_domain(domain, client, discovery)
                 all_jobs.extend(domain_jobs)
                 progress.advance(task)
 
         # Save results
         output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
         with open(output_path, "w") as f:
             for job in all_jobs:
                 f.write(job.model_dump_json() + "\n")
 
         console.print(
             f"\n[bold green]Success![/bold green] Extracted {len(all_jobs)} jobs to {output_file}"
+        )
+
+    finally:
+        await client.close()
+
+
+async def run_harvest(domains: List[str], output_file: str):
+    client = AsyncClient(max_connections=50)
+    discovery = DiscoveryEngine(client)
+    all_job_urls = set()
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("[cyan]Harvesting Job URLs...", total=len(domains))
+
+            for domain in domains:
+                progress.update(
+                    task,
+                    description=f"[cyan]Harvesting:[/cyan] [bold]{urlparse(domain).netloc}[/bold]",
+                )
+                job_urls = await discovery.find_job_urls_from_sitemap(domain)
+                if job_urls:
+                    all_job_urls.update(job_urls)
+                progress.advance(task)
+
+        # Save results
+        output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(output_path, "w") as f:
+            for url in sorted(list(all_job_urls)):
+                f.write(url + "\n")
+
+        console.print(
+            f"\n[bold green]Success![/bold green] Harvested {len(all_job_urls)} unique job URLs to {output_file}"
         )
 
     finally:
@@ -180,9 +220,12 @@ def discover(input_file, output_file, use_ct, validate, concurrency):
 
 @cli.command()
 @click.option("--input", default="input/domains.txt", help="File with Avature domains.")
-@click.option("--output", default="output/v2_jobs.jsonl", help="Output JSONL file.")
-def scrape(input, output):
-    """Scrape jobs from discovered portals."""
+@click.option(
+    "--output", default="input/job_urls.txt", help="Output file for job URLs."
+)
+@click.option("--limit", type=int, help="Restrict to N random companies for testing.")
+def harvest(input, output, limit):
+    """Harvest all job URLs from discovered portals."""
     if not Path(input).exists():
         console.print(
             f"[red]Error:[/red] Input file {input} not found. Run 'discover' first."
@@ -192,7 +235,78 @@ def scrape(input, output):
     with open(input, "r") as f:
         domains = [line.strip() for line in f if line.strip()]
 
-    asyncio.run(run_scraper(domains, output))
+    if limit and limit > 0:
+        import random
+
+        selected_domains = random.sample(domains, min(limit, len(domains)))
+        console.print(
+            f"[bold yellow]Testing Mode:[/bold yellow] Restricted to {len(selected_domains)} random companies."
+        )
+        domains = selected_domains
+
+    asyncio.run(run_harvest(domains, output))
+
+
+@cli.command()
+@click.option("--input", default="input/job_urls.txt", help="File with Job URLs.")
+@click.option("--output", default="output/v2_jobs.jsonl", help="Output JSONL file.")
+@click.option("--limit", type=int, help="Limit number of jobs to scrape.")
+def scrape(input, output, limit):
+    """Scrape details from harvested job URLs."""
+    if not Path(input).exists():
+        console.print(
+            f"[red]Error:[/red] Input file {input} not found. Run 'harvest' first."
+        )
+        return
+
+    with open(input, "r") as f:
+        urls = [line.strip() for line in f if line.strip()]
+
+    if limit and limit > 0:
+        urls = urls[:limit]
+        console.print(
+            f"[bold yellow]Testing Mode:[/bold yellow] Restricted to {len(urls)} jobs."
+        )
+
+    async def scrape_jobs():
+        client = AsyncClient(max_connections=50)
+        all_jobs = []
+        try:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+                transient=True,
+            ) as progress:
+                task = progress.add_task("[cyan]Scraping Jobs...", total=len(urls))
+                for url in urls:
+                    progress.update(
+                        task, description=f"[cyan]Scraping:[/cyan] {url[:50]}..."
+                    )
+                    resp = await client.get(url)
+                    if resp:
+                        domain = urlparse(url).netloc
+                        job = JobParser.extract_from_html(
+                            resp.text, url, domain.split(".")[0].title()
+                        )
+                        if job:
+                            all_jobs.append(job)
+                    progress.advance(task)
+
+            output_path = Path(output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w") as f:
+                for job in all_jobs:
+                    f.write(job.model_dump_json() + "\n")
+            console.print(
+                f"\n[bold green]Success![/bold green] Extracted {len(all_jobs)} jobs to {output}"
+            )
+        finally:
+            await client.close()
+
+    asyncio.run(scrape_jobs())
 
 
 if __name__ == "__main__":

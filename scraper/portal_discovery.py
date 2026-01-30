@@ -103,7 +103,14 @@ class PortalDiscovery:
         logger.info(f"Validating {len(urls)} portals with concurrency={concurrency}...")
         semaphore = asyncio.Semaphore(concurrency)
 
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        async with httpx.AsyncClient(
+            timeout=10, follow_redirects=True, headers=headers
+        ) as client:
             tasks = [self._check_url(client, url, semaphore) for url in urls]
             results = await asyncio.gather(*tasks)
             valid_urls = {url for url in results if url}
