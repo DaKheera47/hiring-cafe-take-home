@@ -112,39 +112,63 @@ def cli():
     default=True,
     help="Use Certificate Transparency logs for discovery.",
 )
-def discover(input_file, output_file, use_ct):
+@click.option(
+    "--validate",
+    is_flag=True,
+    default=True,
+    help="Validate discovered portals before saving.",
+)
+@click.option("--concurrency", default=20, help="Parallel validation concurrency.")
+def discover(input_file, output_file, use_ct, validate, concurrency):
     """Discover and normalize Avature portals."""
     from scraper.portal_discovery import PortalDiscovery
 
     console.print("[bold cyan]Starting Portal Discovery...[/bold cyan]")
-    all_domains = set()
+    discovery = PortalDiscovery()
+    all_potential_domains = set()
 
     # 1. Process local urls.txt if it exists
     path = Path(input_file)
     if path.exists():
         with open(path, "r") as f:
             for line in f:
-                normalized = PortalDiscovery.normalize_to_base(line)
+                normalized = discovery.normalize_to_base(line)
                 if normalized:
-                    all_domains.add(normalized)
-        logger.info(f"Loaded {len(all_domains)} base domains from {input_file}")
+                    all_potential_domains.add(normalized)
+        logger.info(
+            f"Loaded {len(all_potential_domains)} potential base domains from {input_file}"
+        )
     else:
         logger.warning(f"Seed file {input_file} not found. Starting with empty list.")
 
     # 2. Advanced discovery via CT Logs
     if use_ct:
-        ct_domains = asyncio.run(PortalDiscovery.discover_from_ct_logs())
-        all_domains.update(ct_domains)
-        logger.info(f"Total domains after CT discovery: {len(all_domains)}")
+        ct_domains = asyncio.run(discovery.discover_from_ct_logs())
+        all_potential_domains.update(ct_domains)
+        logger.info(
+            f"Total potential domains after CT discovery: {len(all_potential_domains)}"
+        )
 
-    # 3. Save unique cleaned domains
-    sorted_domains = sorted(list(all_domains))
+    # 3. Validation phase
+    if validate and all_potential_domains:
+        console.print(
+            f"[bold yellow]Validating {len(all_potential_domains)} portals...[/bold yellow]"
+        )
+        final_domains = asyncio.run(
+            discovery.validate_portals(
+                list(all_potential_domains), concurrency=concurrency
+            )
+        )
+    else:
+        final_domains = sorted(list(all_potential_domains))
+
+    # 4. Save unique cleaned domains
     with open(output_file, "w") as f:
-        for d in sorted_domains:
+        for d in final_domains:
             f.write(d + "\n")
 
     console.print(
-        f"[bold green]Success![/bold green] Saved {len(sorted_domains)} unique portals to {output_file}"
+        f"[bold green]Success![/bold green] Saved {len(final_domains)} validated portals to {output_file}"
     )
 
 
