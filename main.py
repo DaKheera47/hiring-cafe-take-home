@@ -108,8 +108,11 @@ async def run_harvest(domains: List[str], output_file: str, concurrency: int = 2
         ) as progress:
             task = progress.add_task("[cyan]Harvesting Job URLs...", total=len(domains))
 
-            async def harvest_one(domain):
+            async def harvest_one(domain, index):
                 async with semaphore:
+                    # Staggered start
+                    await asyncio.sleep(index * 0.2 % 3)
+
                     progress.update(
                         task,
                         description=f"[cyan]Harvesting:[/cyan] [bold]{urlparse(domain).netloc}[/bold]",
@@ -123,7 +126,9 @@ async def run_harvest(domains: List[str], output_file: str, concurrency: int = 2
                     finally:
                         progress.advance(task)
 
-            await asyncio.gather(*(harvest_one(domain) for domain in domains))
+            await asyncio.gather(
+                *(harvest_one(domain, i) for i, domain in enumerate(domains))
+            )
 
         # Save results
         output_path = Path(output_file)
@@ -166,7 +171,7 @@ def cli():
     default=True,
     help="Validate discovered portals before saving.",
 )
-@click.option("--concurrency", default=20, help="Parallel validation concurrency.")
+@click.option("--concurrency", default=10, help="Parallel validation concurrency.")
 def discover(input_file, output_file, use_ct, validate, concurrency):
     """Discover and normalize Avature portals."""
     from scraper.portal_discovery import PortalDiscovery
@@ -232,7 +237,7 @@ def discover(input_file, output_file, use_ct, validate, concurrency):
     "--output", default="input/job_urls.txt", help="Output file for job URLs."
 )
 @click.option("--limit", type=int, help="Restrict to N random companies for testing.")
-@click.option("--concurrency", default=20, help="Number of concurrent discovery tasks.")
+@click.option("--concurrency", default=10, help="Number of concurrent discovery tasks.")
 def harvest(input, output, limit, concurrency):
     """Harvest all job URLs from discovered portals."""
     if not Path(input).exists():
@@ -260,7 +265,7 @@ def harvest(input, output, limit, concurrency):
 @click.option("--input", default="input/job_urls.txt", help="File with Job URLs.")
 @click.option("--output", default="output/v2_jobs.jsonl", help="Output JSONL file.")
 @click.option("--limit", type=int, help="Limit number of jobs to scrape.")
-@click.option("--concurrency", default=10, help="Number of concurrent scraper tasks.")
+@click.option("--concurrency", default=5, help="Number of concurrent scraper tasks.")
 def scrape(input, output, limit, concurrency):
     """Scrape details from harvested job URLs."""
     if not Path(input).exists():
@@ -323,8 +328,11 @@ def scrape(input, output, limit, concurrency):
             ) as progress:
                 task = progress.add_task("[cyan]Scraping Jobs...", total=len(urls))
 
-                async def scrape_one(url):
+                async def scrape_one(url, index):
                     async with semaphore:
+                        # Staggered start to avoid concurrent bursts
+                        await asyncio.sleep(index * 0.1 % 2)
+
                         progress.update(
                             task,
                             description=f"[cyan]Scraping:[/cyan] {urlparse(url).netloc}...",
@@ -343,7 +351,9 @@ def scrape(input, output, limit, concurrency):
                         finally:
                             progress.advance(task)
 
-                await asyncio.gather(*(scrape_one(url) for url in urls))
+                await asyncio.gather(
+                    *(scrape_one(url, i) for i, url in enumerate(urls))
+                )
 
             output_path = Path(output)
             output_path.parent.mkdir(parents=True, exist_ok=True)

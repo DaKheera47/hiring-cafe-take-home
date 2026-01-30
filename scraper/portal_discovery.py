@@ -1,8 +1,10 @@
 from urllib.parse import urlparse
 import logging
 import asyncio
-from typing import Set, Optional, List
-import httpx
+from typing import Set, Optional, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .client import AsyncClient
 
 logger = logging.getLogger(__name__)
 
@@ -100,20 +102,18 @@ class PortalDiscovery:
         self, urls: List[str], concurrency: int = 10
     ) -> List[str]:
         """Validates portals in parallel to ensure they are active public Avature sites."""
+        from .client import AsyncClient
+
         logger.info(f"Validating {len(urls)} portals with concurrency={concurrency}...")
         semaphore = asyncio.Semaphore(concurrency)
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        }
-        async with httpx.AsyncClient(
-            timeout=10, follow_redirects=True, headers=headers
-        ) as client:
+        client = AsyncClient(timeout=15, max_connections=concurrency + 5)
+        try:
             tasks = [self._check_url(client, url, semaphore) for url in urls]
             results = await asyncio.gather(*tasks)
             valid_urls = {url for url in results if url}
+        finally:
+            await client.close()
 
         logger.info(
             f"Validation complete: {len(valid_urls)}/{len(urls)} unique public portals found."
@@ -121,7 +121,7 @@ class PortalDiscovery:
         return sorted(list(valid_urls))
 
     async def _check_url(
-        self, client: httpx.AsyncClient, url: str, semaphore: asyncio.Semaphore
+        self, client: "AsyncClient", url: str, semaphore: asyncio.Semaphore
     ) -> Optional[str]:
         """Checks if a URL is a valid public Avature career portal by checking base and /careers path."""
         async with semaphore:
