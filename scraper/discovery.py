@@ -19,7 +19,7 @@ class DiscoveryEngine:
         job_urls = set()
 
         for s_url in sitemap_urls:
-            resp = await self.client.get(s_url)
+            resp = await self.client.get(s_url, max_retries=1, base_delay=5.0)
             if not resp or not resp.text:
                 continue
 
@@ -109,7 +109,7 @@ class DiscoveryEngine:
 
         # First check robots.txt for explicit paths
         robots_url = urljoin(base, "/robots.txt")
-        resp = await self.client.get(robots_url)
+        resp = await self.client.get(robots_url, max_retries=1, base_delay=5.0)
         if resp and resp.status_code == 200:
             sitemaps = re.findall(r"^Sitemap: (.*)$", resp.text, re.MULTILINE)
             for s in sitemaps:

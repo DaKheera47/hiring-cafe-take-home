@@ -558,7 +558,9 @@ class PortalDiscovery:
             for path in paths_to_try:
                 try:
                     target_url = url.rstrip("/") + path
-                    response = await client.get(target_url, timeout=10)
+                    response = await client.get(
+                        target_url, timeout=10, max_retries=0, base_delay=5.0
+                    )
 
                     if response.status_code == 200:
                         html = response.text.lower()

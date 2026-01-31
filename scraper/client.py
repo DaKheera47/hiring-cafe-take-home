@@ -165,20 +165,29 @@ class AsyncClient:
         self._session_manager = SessionManager()
 
     async def get(
-        self, url: str, max_retries: int = 7, **kwargs
+        self,
+        url: str,
+        max_retries: Optional[int] = None,
+        base_delay: Optional[float] = None,
+        **kwargs,
     ) -> Optional[tls_client.response.Response]:
         """
         Fetches a URL with automatic retries for rate-limiting (403, 406, 429).
 
         Uses domain-cached sessions and Firefox 117 fingerprint.
         """
-        base_delay = 60.0  # Base delay before exponential backoff
+        # Allow overrides, otherwise use defaults
+        max_retries = max_retries if max_retries is not None else 7
+        base_delay = base_delay if base_delay is not None else 60.0
+
         base_url = urlparse(url)
         referer = f"{base_url.scheme}://{base_url.netloc}/careers"
 
         for attempt in range(max_retries + 1):
             # Small jitter between requests to look human
-            await asyncio.sleep(1.0 + (attempt * 0.5))
+            # But only if we are actually retrying
+            if attempt > 0:
+                await asyncio.sleep(1.0 + (attempt * 0.5))
 
             try:
                 # Get domain-cached session (with handshake if needed)
@@ -192,7 +201,6 @@ class AsyncClient:
                 # Merge any custom headers (but never override critical ones)
                 if "headers" in kwargs:
                     custom = kwargs.pop("headers")
-                    # Only merge non-critical headers
                     for k, v in custom.items():
                         if k.lower() not in ("user-agent", "connection", "host"):
                             headers[k] = v
@@ -249,11 +257,32 @@ class AsyncClient:
                         return None
 
                 # Other status codes - log and return None
-                logger.warning(f"Unexpected status {response.status_code} for {url}")
                 return None
 
             except Exception as e:
                 domain = urlparse(url).netloc
+                err_msg = str(e).lower()
+
+                # === Permanent Failure Check ===
+                # If these errors occur, the domain is likely dead or unusable.
+                # Retrying for 30 minutes is a waste of time.
+                is_permanent = any(
+                    msg in err_msg
+                    for msg in [
+                        "no such host",  # DNS failure
+                        "no route to host",  # Network routing failure
+                        "connection refused",  # Port closed
+                        "failed to verify certificate",  # SSL/TLS mismatch
+                        "certificate is valid for",  # SSL/TLS mismatch
+                        "unsupported protocol",
+                    ]
+                )
+
+                if is_permanent:
+                    logger.debug(
+                        f"Permanent request error for {domain}: {e}. Skipping retries."
+                    )
+                    return None
 
                 if attempt < max_retries:
                     sleep_time = base_delay * (2**attempt)
@@ -263,7 +292,7 @@ class AsyncClient:
                     await asyncio.sleep(sleep_time)
                     continue
 
-                logger.error(
+                logger.debug(
                     f"Error fetching {domain} after {max_retries} retries: {e}"
                 )
                 return None
