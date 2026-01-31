@@ -1,7 +1,7 @@
 from urllib.parse import urlparse
 import logging
 import asyncio
-from typing import Set, Optional, List, TYPE_CHECKING
+from typing import Set, Optional, List, Dict, Tuple, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .client import AsyncClient
@@ -269,7 +269,7 @@ class PortalDiscovery:
 
         return domains
 
-    async def run_all_discovery(self) -> Set[str]:
+    async def run_all_discovery(self) -> Tuple[Set[str], Dict[str, int]]:
         """Run all discovery methods in parallel and merge results."""
         logger.info("🚀 Starting Deep Recon for Avature Portals...")
 
@@ -296,13 +296,21 @@ class PortalDiscovery:
             .union(wb_domains)
         )
 
+        stats = {
+            "CT Logs": len(ct_domains),
+            "HackerTarget": len(ht_domains),
+            "AlienVault": len(av_domains),
+            "Urlscan.io": len(us_domains),
+            "Wayback Machine": len(wb_domains),
+        }
+
         logger.info(
             f"Discovery complete: CT={len(ct_domains)}, HackerTarget={len(ht_domains)}, "
             f"AlienVault={len(av_domains)}, Urlscan={len(us_domains)}, Wayback={len(wb_domains)} "
             f"-> Total unique: {len(all_domains)}"
         )
 
-        return all_domains
+        return all_domains, stats
 
     async def validate_portals(
         self, urls: List[str], concurrency: int = 10

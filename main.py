@@ -16,6 +16,7 @@ from rich.progress import (
     TimeRemainingColumn,
     MofNCompleteColumn,
 )
+from rich.table import Table
 from rich.logging import RichHandler
 
 from scraper.client import AsyncClient
@@ -211,10 +212,20 @@ def discover(input_file, output_file, deep_recon, validate, concurrency):
         console.print(
             "[bold yellow]Running Deep Recon (CT logs, HackerTarget, AlienVault, Urlscan, Wayback)...[/bold yellow]"
         )
-        recon_domains = asyncio.run(discovery.run_all_discovery())
+        recon_domains, stats = asyncio.run(discovery.run_all_discovery())
         all_potential_domains.update(recon_domains)
-        added_count = len(all_potential_domains) - initial_count
 
+        # Print per-source stats
+        table = Table(title="Discovery Results per Source")
+        table.add_column("Source", style="cyan")
+        table.add_column("Portals Found", style="magenta")
+
+        for source, count in stats.items():
+            table.add_row(source, str(count))
+
+        console.print(table)
+
+        added_count = len(all_potential_domains) - initial_count
         logger.info(f"Deep Recon complete: added {added_count} new potential domains.")
         logger.info(
             f"Total potential domains to validate: {len(all_potential_domains)}"
