@@ -6,6 +6,15 @@
 - **Effort:** ~6 hours with AI-assisted research and development
 - **Features:** Domain discovery at scale, resumability support, structure-first parsing
 
+
+# sitemap based url discovery
+https://github.com/user-attachments/assets/9601ed46-ef9b-4d16-b195-89ad46392391
+
+# Getting job details "scraping" step
+https://github.com/user-attachments/assets/4febe8be-382e-493c-a91e-0bb1bdfa195f
+
+
+
 This project aims to scrape job inventory from Avature portals using a combination of techniques to bypass WAFs and extract job data. I found several hurdles along the way, which i've documented below. I won't bother mentioning simple things like preferring web requests vs spinning up a full-blown web browser, etc. I'll instead mention the more complex hurdles that I overcame for Avature specifically.
 
 I focused on ensuring I got around the WAFs in place, more than the data extraction process, as that can be improved more easily, once we have the HTML available to us. Given the 6-hour constraint, I prioritised Access & Coverage (solving the WAF) over granular parsing quality. The extraction logic is modular and ready for site-specific tuning
