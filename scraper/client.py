@@ -78,7 +78,8 @@ class SessionManager:
 
     def __init__(self):
         self._sessions: Dict[str, tls_client.Session] = {}
-        self._lock = asyncio.Lock()
+        self._locks: Dict[str, asyncio.Lock] = {}
+        self._master_lock = asyncio.Lock()
 
     def _create_firefox_session(self) -> tls_client.Session:
         """Creates a new TLS session with strict Firefox 117 fingerprint."""
@@ -104,48 +105,62 @@ class SessionManager:
         """
         domain = self._extract_domain(url)
 
-        async with self._lock:
-            if domain not in self._sessions:
-                logger.debug(f"Creating new Firefox 117 session for {domain}")
-                session = self._create_firefox_session()
-                self._sessions[domain] = session
-
-                # === HANDSHAKE: Visit careers page first to get cookies ===
-                base_url = self._get_base_url(url)
-                careers_url = f"{base_url}/careers"
-
-                try:
-                    logger.debug(
-                        f"Handshake: Visiting {careers_url} to capture cookies"
-                    )
-                    headers = get_firefox_117_headers()
-
-                    # This is sync, run in thread
-                    await asyncio.to_thread(
-                        session.get,
-                        careers_url,
-                        headers=headers,
-                        timeout_seconds=30,
-                        allow_redirects=True,
-                    )
-                    logger.debug(f"Handshake complete for {domain}")
-                except Exception as e:
-                    logger.warning(f"Handshake failed for {domain}: {e}")
-                    # Continue anyway - session is still usable
-
+        # 1. Fast path: session already exists
+        if domain in self._sessions:
             return self._sessions[domain]
+
+        # 2. Get or create a lock for this specific domain
+        async with self._master_lock:
+            if domain not in self._locks:
+                self._locks[domain] = asyncio.Lock()
+            domain_lock = self._locks[domain]
+
+        # 3. Perform handshake under the domain-specific lock
+        async with domain_lock:
+            # Check again now that we have the lock
+            if domain in self._sessions:
+                return self._sessions[domain]
+
+            logger.debug(f"Creating new Firefox 117 session for {domain}")
+            session = self._create_firefox_session()
+
+            # === HANDSHAKE: Visit careers page first to get cookies ===
+            base_url = self._get_base_url(url)
+            careers_url = f"{base_url}/careers"
+
+            try:
+                logger.debug(f"Handshake: Visiting {careers_url} to capture cookies")
+                headers = get_firefox_117_headers()
+
+                # This is sync, run in thread
+                await asyncio.to_thread(
+                    session.get,
+                    careers_url,
+                    headers=headers,
+                    timeout_seconds=30,
+                    allow_redirects=True,
+                )
+                logger.debug(f"Handshake complete for {domain}")
+            except Exception as e:
+                logger.warning(f"Handshake failed for {domain}: {e}")
+                # Continue anyway - session is still usable
+
+            self._sessions[domain] = session
+            return session
 
     async def invalidate_session(self, url: str) -> None:
         """Removes a session from cache (call after repeated failures)."""
         domain = self._extract_domain(url)
-        async with self._lock:
+        async with self._master_lock:
             if domain in self._sessions:
                 del self._sessions[domain]
                 logger.debug(f"Invalidated session for {domain}")
+            # We keep the lock object to avoid churn, it's just a small object
 
     def clear_all(self) -> None:
-        """Clears all cached sessions."""
+        """Clears all cached sessions and locks."""
         self._sessions.clear()
+        self._locks.clear()
 
 
 class AsyncClient:

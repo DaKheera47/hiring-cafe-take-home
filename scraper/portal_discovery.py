@@ -540,15 +540,46 @@ class PortalDiscovery:
     ) -> List[str]:
         """Validates portals in parallel to ensure they are active public Avature sites."""
         from .client import AsyncClient
+        from rich.progress import (
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            BarColumn,
+            TaskProgressColumn,
+            MofNCompleteColumn,
+            TimeRemainingColumn,
+        )
 
         logger.info(f"Validating {len(urls)} portals with concurrency={concurrency}...")
         semaphore = asyncio.Semaphore(concurrency)
 
         client = AsyncClient(timeout=15, max_connections=concurrency + 5)
+        valid_urls = set()
+
         try:
-            tasks = [self._check_url(client, url, semaphore) for url in urls]
-            results = await asyncio.gather(*tasks)
-            valid_urls = {url for url in results if url}
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                MofNCompleteColumn(),
+                TimeRemainingColumn(),
+                refresh_per_second=4,
+            ) as progress:
+                task = progress.add_task(
+                    "[green]🛡️  Validating Portals...", total=len(urls)
+                )
+
+                async def _checked_task(url):
+                    try:
+                        res = await self._check_url(client, url, semaphore)
+                        return res
+                    finally:
+                        progress.advance(task)
+
+                tasks = [_checked_task(url) for url in urls]
+                results = await asyncio.gather(*tasks)
+                valid_urls = {url for url in results if url}
         finally:
             await client.close()
 
