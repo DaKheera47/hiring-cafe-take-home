@@ -1,10 +1,10 @@
 # Take home assignment to scrape Avature
 
-- took about 6 hours to do, with all sorts of ai assistance
-- used tls_client to bypass waf
-- used asyncio to speed up the process
-- found 19333 jobs from 110 company domains (this low number is because some base domains in the provided list were not valid anymore)
-- scraper has resumability support
+- **Candidate:** Shaheer Sarfaraz
+- **Results:** 16,599 unique jobs found across 265 valid domains
+- **Tech Stack:** `tls_client` (WAF bypass), `asyncio` (concurrency), `sitemaps` (discovery)
+- **Effort:** ~6 hours with AI-assisted research and development
+- **Features:** Domain discovery at scale, resumability support, structure-first parsing
 
 This project aims to scrape job inventory from Avature portals using a combination of techniques to bypass WAFs and extract job data. I found several hurdles along the way, which i've documented below. I won't bother mentioning simple things like preferring web requests vs spinning up a full-blown web browser, etc. I'll instead mention the more complex hurdles that I overcame for Avature specifically.
 
@@ -38,9 +38,15 @@ Some Avature sites are modern (React/JSON), while others are... vintage (Server-
 
 This is the bit that has the most room for improvement.
 
-## Domain Discovery
+## Domain Discovery & Harvesting
 
-The project brief asked to expand coverage, so I didn't use just the existing URLs. I implemented a discovery module that queries Certificate Transparency Logs (`crt.sh`) for wildcard certificates (`%.avature.net`). This allowed us to uncover internal and unlisted career portals that weren't in the public seed list, but this required cleaning as some of the domains were not valid anymore or were not career portals.
+To find these domains, I expanded the search far beyond the initial seed list. I implemented a discovery module that queries:
+
+- **Certificate Transparency Logs (`crt.sh`)** for wildcard certificates (`%.avature.net`).
+- **AlienVault & Hacker_Target** to find related DNS Records.
+- **Wayback Machine** to discover historical URLs that may still be active.
+
+This process uncovered 265 valid domains. To find job detail pages on these domains, I focused on finding and scraping their **XML sitemaps**, which ensures higher coverage than scraping the UI directly and helps bypass potential UI pagination limits.
 
 ## Trade-offs
 
