@@ -573,6 +573,10 @@ class PortalDiscovery:
                 async def _checked_task(url):
                     try:
                         res = await self._check_url(client, url, semaphore)
+                        if res:
+                            # It's either a 200 (Verified) or 406 (Protected)
+                            # res is the URL returned
+                            logger.info(f"[bold green]VERIFIED[/bold green]: {res}")
                         return res
                     finally:
                         progress.advance(task)
@@ -600,8 +604,15 @@ class PortalDiscovery:
                 try:
                     target_url = url.rstrip("/") + path
                     response = await client.get(
-                        target_url, timeout=10, max_retries=0, base_delay=5.0
+                        target_url,
+                        timeout=10,
+                        max_retries=0,
+                        base_delay=5.0,
+                        return_on_waf=True,
                     )
+
+                    if not response:
+                        continue
 
                     if response.status_code == 200:
                         html = response.text.lower()
@@ -650,6 +661,11 @@ class PortalDiscovery:
                             if final_url.lower() != url.lower().rstrip("/"):
                                 logger.info(f"Detected: {url} -> {final_url}")
                             return final_url
+
+                    elif response.status_code == 406:
+                        # 406 is a very strong positive signal for an active Avature WAF
+                        logger.info(f"[bold yellow]PROTECTED[/bold yellow]: {url}")
+                        return url.rstrip("/")
 
                 except Exception as e:
                     logger.debug(f"Error checking {url}{path}: {e}")

@@ -197,6 +197,7 @@ class AsyncClient:
 
         base_url = urlparse(url)
         referer = f"{base_url.scheme}://{base_url.netloc}/careers"
+        return_on_waf = kwargs.pop("return_on_waf", False)
 
         for attempt in range(max_retries + 1):
             # Small jitter between requests to look human
@@ -247,6 +248,9 @@ class AsyncClient:
 
                 # === WAF Block Detection ===
                 if response.status_code in (403, 406, 429):
+                    if return_on_waf:
+                        return response
+
                     domain = urlparse(url).netloc
 
                     if attempt < max_retries:
