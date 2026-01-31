@@ -165,7 +165,7 @@ class AsyncClient:
         self._session_manager = SessionManager()
 
     async def get(
-        self, url: str, max_retries: int = 4, **kwargs
+        self, url: str, max_retries: int = 7, **kwargs
     ) -> Optional[tls_client.response.Response]:
         """
         Fetches a URL with automatic retries for rate-limiting (403, 406, 429).
