@@ -111,27 +111,32 @@ class PortalDiscovery:
     async def discover_from_wayback(self) -> Set[str]:
         """
         Query Wayback Machine CDX API with streaming and concurrent validation.
-
-        This implements the "firehose" pattern:
-        1. Stream CDX results with retry logic
-        2. Filter junk extensions client-side
-        3. Deduplicate domains on-the-fly
-        4. Validate discovered domains with HEAD/GET requests
-        5. Check for Avature signature in response
         """
         import requests
         from requests.adapters import HTTPAdapter
         import threading
         import queue
+        from rich.progress import (
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            BarColumn,
+            TaskProgressColumn,
+            TimeRemainingColumn,
+            MofNCompleteColumn,
+        )
+
+        # Silence noisy urllib3 logs during firehose
+        logging.getLogger("urllib3").setLevel(logging.ERROR)
+        logging.getLogger("requests").setLevel(logging.ERROR)
 
         try:
             from urllib3.util.retry import Retry
         except Exception:
             Retry = None
 
-        logger.info("🌊 Starting Wayback Machine firehose discovery...")
-
-        # Junk extensions to filter out
+        # Configs
+        WORKER_THREADS = 30
         JUNK_EXTS = (
             ".css",
             ".js",
@@ -151,36 +156,44 @@ class PortalDiscovery:
             ".pdf",
         )
 
-        # Build session with retry logic
-        def build_session() -> requests.Session:
+        def build_session(retries=True) -> requests.Session:
             s = requests.Session()
-            if Retry is not None:
+            if retries and Retry is not None:
                 retry = Retry(
                     total=5,
                     connect=5,
                     read=5,
                     backoff_factor=1.0,
                     status_forcelist=(429, 500, 502, 503, 504),
+                    raise_on_status=False,
                 )
                 adapter = HTTPAdapter(
-                    max_retries=retry, pool_connections=50, pool_maxsize=50
+                    max_retries=retry,
+                    pool_connections=WORKER_THREADS + 10,
+                    pool_maxsize=WORKER_THREADS + 10,
+                )
+                s.mount("https://", adapter)
+                s.mount("http://", adapter)
+            else:
+                # Minimal adapter for validation (no retries)
+                adapter = HTTPAdapter(
+                    pool_connections=WORKER_THREADS + 10,
+                    pool_maxsize=WORKER_THREADS + 10,
                 )
                 s.mount("https://", adapter)
                 s.mount("http://", adapter)
             return s
 
-        session = build_session()
+        # Separate sessions: one for the stable stream, one for the chaotic domain checks
+        wayback_session = build_session(retries=True)
+        validation_session = build_session(retries=False)
 
         wayback_headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; avature-scraper/1.0; +https://example.invalid)",
+            "User-Agent": "Mozilla/5.0 (compatible; avature-scraper/1.0; +https://hiring.cafe)",
             "Accept": "text/plain,*/*",
         }
 
-        # Use the timemap CDX endpoint for better streaming
-        wayback_url = (
-            "https://web.archive.org/web/timemap/cdx"
-            "?url=avature.net&matchType=domain&fl=original&collapse=urlkey"
-        )
+        wayback_url = "https://web.archive.org/web/timemap/cdx?url=avature.net&matchType=domain&fl=original&collapse=urlkey"
 
         seen_domains: Set[str] = set()
         validated_domains: Set[str] = set()
@@ -190,199 +203,196 @@ class PortalDiscovery:
         lock = threading.Lock()
 
         def validate_domain(domain: str) -> Optional[str]:
-            """Validate a single domain with HEAD/GET and signature check."""
             headers = {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0.0.0 Safari/537.36"
             }
             url = f"https://{domain}/careers"
-
             try:
-                # HEAD for cheap existence/redirect check
-                r = session.head(
-                    url, headers=headers, timeout=(10, 20), allow_redirects=True
+                # Quick probe
+                r = validation_session.head(
+                    url, headers=headers, timeout=(5, 10), allow_redirects=True
                 )
-
-                # GET fallback if HEAD is blocked
                 if r.status_code in (405, 403):
-                    r = session.get(
+                    r = validation_session.get(
                         url,
                         headers=headers,
-                        timeout=(10, 30),
+                        timeout=(5, 10),
                         allow_redirects=True,
                         stream=True,
                     )
 
                 if r.status_code == 200:
-                    # Do a GET if we only did HEAD
                     if r.request.method != "GET":
-                        r = session.get(
+                        r = validation_session.get(
                             url,
                             headers=headers,
-                            timeout=(10, 30),
+                            timeout=(5, 10),
                             allow_redirects=True,
                             stream=True,
                         )
 
-                    # Read only a small chunk for signature
+                    # Sig check
                     chunk = b""
                     try:
-                        for part in r.iter_content(chunk_size=32768):
+                        for part in r.iter_content(chunk_size=4096):
                             chunk = part
                             break
-                    except Exception:
-                        chunk = b""
+                    except:
+                        pass
 
                     body_l = chunk.decode("utf-8", "ignore").lower()
                     headers_l = str(r.headers).lower()
 
-                    if ("avature" in body_l) or ("avature" in headers_l):
-                        logger.debug(f"✅ Validated: {domain}")
+                    if "avature" in body_l or "avature" in headers_l:
                         return f"https://{domain}"
 
                 elif r.status_code == 406:
-                    # 406 means the server exists but is hostile to our probe
-                    # We treat this as valid (it's an Avature WAF)
-                    logger.debug(f"⚠️ 406 (WAF): {domain}")
                     return f"https://{domain}"
-
-            except Exception as e:
-                logger.debug(f"Validation error for {domain}: {e}")
-
+            except:
+                pass
             return None
 
-        def validation_worker():
-            """Worker thread that validates domains from the queue."""
-            while not stop_event.is_set():
-                try:
-                    domain = domain_queue.get(timeout=1)
-                except queue.Empty:
-                    if producer_done.is_set():
-                        return
-                    continue
+        # --- Progress Logic ---
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            refresh_per_second=4,
+        ) as progress:
+            # We don't know the exact total for wayback, but we can guess based on history or use total=0
+            stream_task = progress.add_task(
+                "[cyan]🌊 Streaming Wayback CDX...", total=None
+            )
+            validation_task = progress.add_task(
+                "[green]🛡️ Validating Portals...", total=None
+            )
 
-                try:
-                    result = validate_domain(domain)
-                    if result:
-                        with lock:
-                            validated_domains.add(result)
-                finally:
-                    domain_queue.task_done()
+            def validation_worker():
+                while not stop_event.is_set():
+                    try:
+                        domain = domain_queue.get(timeout=1)
+                    except queue.Empty:
+                        if producer_done.is_set():
+                            return
+                        continue
 
-        def stream_wayback():
-            """Stream CDX results with retry logic."""
-            count = 0
+                    try:
+                        result = validate_domain(domain)
+                        if result:
+                            with lock:
+                                validated_domains.add(result)
+                    finally:
+                        progress.advance(validation_task)
+                        domain_queue.task_done()
 
-            for attempt in range(1, 6):
-                if stop_event.is_set():
-                    break
+            def stream_wayback():
+                count = 0
+                for attempt in range(1, 4):
+                    if stop_event.is_set():
+                        break
+                    try:
+                        with wayback_session.get(
+                            wayback_url,
+                            stream=True,
+                            headers=wayback_headers,
+                            timeout=(15, 300),
+                        ) as r:
+                            if r.status_code != 200:
+                                import time
 
-                try:
-                    logger.info(f"Wayback stream attempt {attempt}/5...")
-                    with session.get(
-                        wayback_url,
-                        stream=True,
-                        headers=wayback_headers,
-                        timeout=(15, 180),
-                    ) as r:
-                        if r.status_code != 200:
-                            logger.warning(f"Wayback returned {r.status_code}")
-                            import time
-
-                            time.sleep(min(2**attempt, 30))
-                            continue
-
-                        for line in r.iter_lines(chunk_size=65536, decode_unicode=True):
-                            if stop_event.is_set():
-                                break
-                            if not line:
+                                time.sleep(5)
                                 continue
 
-                            raw_url = line.strip()
-                            lower_url = raw_url.lower()
-
-                            # Client-side filter
-                            if (
-                                lower_url.endswith(JUNK_EXTS)
-                                or "/portal/t9/" in lower_url
+                            for line in r.iter_lines(
+                                chunk_size=65536, decode_unicode=True
                             ):
-                                continue
-
-                            if not raw_url.startswith("http"):
-                                raw_url = "http://" + raw_url
-
-                            try:
-                                parsed = urlparse(raw_url)
-                                domain = parsed.netloc.lower()
-
-                                # Remove port if present
-                                if ":" in domain:
-                                    domain = domain.split(":")[0]
-
-                                if "avature.net" not in domain:
+                                if stop_event.is_set():
+                                    break
+                                if not line:
                                     continue
 
-                                # Dedup and filter
-                                if domain in seen_domains:
-                                    continue
-                                seen_domains.add(domain)
-
-                                # Apply blacklist
-                                if any(k in domain for k in self.BLACKLIST_KEYWORDS):
-                                    continue
-                                if domain in self.EXCLUDED_DOMAINS:
+                                raw_url = line.strip()
+                                if (
+                                    raw_url.lower().endswith(JUNK_EXTS)
+                                    or "/portal/t9/" in raw_url.lower()
+                                ):
                                     continue
 
-                                # Queue for validation
-                                domain_queue.put(domain)
-                                count += 1
-
-                                if count % 50 == 0:
-                                    logger.info(
-                                        f"🌊 Streamed: {count} | Queued: {domain_queue.qsize()} | "
-                                        f"Validated: {len(validated_domains)}"
+                                try:
+                                    domain = (
+                                        urlparse(
+                                            raw_url
+                                            if "://" in raw_url
+                                            else f"http://{raw_url}"
+                                        )
+                                        .netloc.lower()
+                                        .split(":")[0]
                                     )
+                                    if (
+                                        "avature.net" not in domain
+                                        or domain in seen_domains
+                                    ):
+                                        continue
 
-                            except Exception:
-                                pass
+                                    seen_domains.add(domain)
+                                    if (
+                                        any(
+                                            k in domain for k in self.BLACKLIST_KEYWORDS
+                                        )
+                                        or domain in self.EXCLUDED_DOMAINS
+                                    ):
+                                        continue
 
-                    # If we completed without exception, stop retrying
-                    logger.info(
-                        f"✅ Wayback stream complete: {count} unique domains found"
-                    )
-                    break
+                                    domain_queue.put(domain)
+                                    count += 1
 
-                except Exception as e:
-                    logger.warning(f"Wayback stream error (attempt {attempt}/5): {e}")
-                    import time
+                                    progress.update(
+                                        stream_task,
+                                        description=f"[cyan]🌊 Streamed: {count} domains",
+                                    )
+                                    # Dynamically update validation total
+                                    progress.update(validation_task, total=count)
 
-                    time.sleep(min(2**attempt, 30))
-                    continue
+                                except:
+                                    pass
+                        break
+                    except Exception as e:
+                        import time
 
-            producer_done.set()
+                        time.sleep(5)
 
-        # Run the streaming + validation in threads
-        WORKER_THREADS = 20
-        workers = []
+                producer_done.set()
+                progress.update(
+                    stream_task,
+                    description="[cyan]✅ Stream Complete",
+                    completed=1,
+                    total=1,
+                )
 
-        # Start validation workers
-        for _ in range(WORKER_THREADS):
-            t = threading.Thread(target=validation_worker, daemon=True)
-            t.start()
-            workers.append(t)
+            # Execution
+            workers = [
+                threading.Thread(target=validation_worker, daemon=True)
+                for _ in range(WORKER_THREADS)
+            ]
+            for w in workers:
+                w.start()
 
-        # Run producer in a separate thread
-        producer_thread = threading.Thread(target=stream_wayback)
-        producer_thread.start()
+            producer_thread = threading.Thread(target=stream_wayback, daemon=True)
+            producer_thread.start()
 
-        try:
-            producer_thread.join()
-            domain_queue.join()
-        except KeyboardInterrupt:
-            logger.warning("Wayback discovery interrupted")
-            stop_event.set()
-            producer_done.set()
+            try:
+                producer_thread.join()
+                domain_queue.join()
+            except KeyboardInterrupt:
+                stop_event.set()
+                producer_done.set()
 
-        logger.info(f"🎉 Wayback validated: {len(validated_domains)} active portals")
+        logger.info(
+            f"✨ Wayback Discovery Finalized: {len(validated_domains)} active portals."
+        )
         return validated_domains
 
     async def discover_from_hackertarget(self) -> Set[str]:
